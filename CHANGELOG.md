@@ -1,16 +1,25 @@
 # Changelog
 
+## 0.3.0 (beta) — 2026-10-25
+
+- Add experimental in-editor 15 fps video preview, using incremental FFmpeg MJPEG frame decoding and mpv audio clock. Preserve classic separate-window mpv playback as fallback.
+- Add desktop file drop-to-import, and drop-to-insert when the file is released over the video timeline.
+- Add in-app media library clip drag-and-drop to ripple-insert onto the timeline.
+- Add snapping of playhead seeking and clip insert points to existing cut boundaries with toggleable 8-pixel tolerance.
+- Add editing/transport keyboard shortcuts (Space, S, Delete, arrows, Home/End, Ctrl+Z/Y/S/O).
+- Fix the Go module path to `github.com/SeraphinaDX/VelvetCut`.
+- Add tests covering snapping and bounded FFmpeg streamed video frames.
+
+**Testing note:** Go editing/media tests pass locally. Fyne desktop and mpv A/V playback require validation on Linux; in-editor preview is experimental and is not effects-accurate.
+
 ## 0.2.0 — 2026-10-25
 
-- Add separate-window mpv synchronized video/audio preview, virtual EDL timeline and local IPC playhead updates.
-- Add audio waveforms with source-time-aware trimming.
-- Add titles (first 3 seconds) and clip fade-from/to-black plus audio fade for MP4 exports.
-- Add validations for fade durations, transform fade metadata on trim and split.
-- Add integration tests for title and fades, waveform and EDL escaping.
-- Maintain compatibility with the original `.velvetcut` v1 project format.
-
-**Known limitations:** Preview window is separate; mpv preview does not composite titles/fades, and mixed audio/no-audio sources may not preview consistently. Export handles the latter. True cross-dissolves and multitrack editing are not yet implemented.
+- Add mpv synchronized external video/audio preview with virtual EDL and local IPC timeline position.
+- Add audio waveforms aligned to trimmed source clips.
+- Add per-clip titles and black fades (with matching audio fades) to exported MP4s.
+- Add validation for fade parameters and integration tests for export/title/fade/waveform/EDL.
+- Maintain project v1 compatibility.
 
 ## 0.1.0 — 2026-10-25
 
-- Initial non-destructive Fyne timeline with insertion, split, edge-trim, reordering, still-image preview, undo/redo, save/load, MP4 export.
+- Initial non-destructive Fyne timeline: insert, split, trim, reorder, thumbnail scrub preview, undo/redo, project save/open, and MP4 export.

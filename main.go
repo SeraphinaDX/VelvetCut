@@ -17,12 +17,13 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/example/velvetcut/editor"
-	"github.com/example/velvetcut/media"
+	"github.com/SeraphinaDX/VelvetCut/editor"
+	"github.com/SeraphinaDX/VelvetCut/media"
 )
 
 var (
@@ -40,35 +41,88 @@ func (t violetTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 }
 
 type Studio struct {
-	window           fyne.Window
-	project          editor.Project
-	library          []editor.Clip
-	libraryChoice    int
-	selected         int
-	playhead         float64
-	zoom             float64 // logical pixels per second
-	timeline         *Timeline
-	timelineScroll   *container.Scroll
-	mediaList        *widget.List
-	info             *widget.Label
-	clock            *widget.Label
-	selectedInfo     *widget.Label
-	preview          *canvas.Image
-	playButton       *widget.Button
-	projectPath      string
-	undo             []editor.Project
-	redo             []editor.Project
-	playing          bool
-	playbackStop     chan struct{}
-	previewCancel    context.CancelFunc
-	previewSeq       uint64
-	lastFrameKey     string
-	frames           map[string]image.Image
-	thumbs           map[string]image.Image
-	waveforms        map[string][]float32
-	player           *media.Player
-	playerGeneration uint64
-	nextID           uint64
+	window                  fyne.Window
+	project                 editor.Project
+	library                 []editor.Clip
+	libraryChoice           int
+	selected                int
+	playhead                float64
+	zoom                    float64 // logical pixels per second
+	timeline                *Timeline
+	timelineScroll          *container.Scroll
+	mediaList               *widget.List
+	info                    *widget.Label
+	clock                   *widget.Label
+	selectedInfo            *widget.Label
+	preview                 *canvas.Image
+	playButton              *widget.Button
+	projectPath             string
+	undo                    []editor.Project
+	redo                    []editor.Project
+	playing                 bool
+	playbackStop            chan struct{}
+	previewCancel           context.CancelFunc
+	previewSeq              uint64
+	lastFrameKey            string
+	frames                  map[string]image.Image
+	thumbs                  map[string]image.Image
+	waveforms               map[string][]float32
+	player                  *media.Player
+	playerGeneration        uint64
+	nextID                  uint64
+	snapping                bool
+	embeddedPreview         bool
+	previewVideoClip        int
+	previewVideoStart       float64
+	previewVideoSourceStart float64
+	previewVideoFrames      <-chan media.PreviewFrame
+	previewVideoNext        *media.PreviewFrame
+	previewVideoCancel      context.CancelFunc
+	previewNotes            *widget.Label
+}
+
+// Canvas shortcuts run whenever a text entry is not consuming keyboard input.
+// Ctrl combinations are explicit desktop shortcuts; typing in a title dialog
+// therefore never accidentally splits or deletes a clip.
+func (s *Studio) installShortcuts() {
+	canvas := s.window.Canvas()
+	canvas.SetOnTypedRune(func(r rune) {
+		switch r {
+		case ' ':
+			s.togglePlayback()
+		case 's', 'S':
+			s.split()
+		}
+	})
+	canvas.SetOnTypedKey(func(e *fyne.KeyEvent) {
+		switch e.Name {
+		case fyne.KeyDelete, fyne.KeyBackspace:
+			s.deleteSelected()
+		case fyne.KeyLeft:
+			s.pause()
+			s.seek(s.snapTime(s.playhead - 1.0/30))
+		case fyne.KeyRight:
+			s.pause()
+			s.seek(s.snapTime(s.playhead + 1.0/30))
+		case fyne.KeyHome:
+			s.pause()
+			s.seek(0)
+		case fyne.KeyEnd:
+			s.pause()
+			s.seek(s.project.Duration())
+		}
+	})
+	for _, binding := range []struct {
+		key    fyne.KeyName
+		action func()
+	}{
+		{fyne.KeyZ, s.undoEdit}, {fyne.KeyY, s.redoEdit}, {fyne.KeyS, s.saveProject},
+		{fyne.KeyO, s.openProject},
+	} {
+		shortcut := &desktop.CustomShortcut{KeyName: binding.key, Modifier: fyne.KeyModifierControl}
+		action := binding.action
+		canvas.AddShortcut(shortcut, func(fyne.Shortcut) { action() })
+	}
 }
 
 func main() {
@@ -77,12 +131,16 @@ func main() {
 	win := a.NewWindow("VelvetCut · Video Editor")
 	s := &Studio{
 		window: win, project: editor.NewProject(), selected: -1, libraryChoice: -1,
-		zoom: 45, frames: make(map[string]image.Image), thumbs: make(map[string]image.Image), waveforms: make(map[string][]float32),
+		zoom: 45, snapping: true, embeddedPreview: true, previewVideoClip: -1,
+		frames: make(map[string]image.Image), thumbs: make(map[string]image.Image), waveforms: make(map[string][]float32),
 	}
 	win.Resize(fyne.NewSize(1240, 800))
 	win.SetContent(s.build())
+	s.installShortcuts()
+	win.SetOnDropped(s.importDroppedFiles)
 	win.SetOnClosed(func() {
 		s.stopPlayer()
+		s.stopVideoStream()
 		if s.previewCancel != nil {
 			s.previewCancel()
 		}
@@ -106,27 +164,30 @@ func (s *Studio) build() fyne.CanvasObject {
 
 	s.mediaList = widget.NewList(
 		func() int { return len(s.library) },
-		func() fyne.CanvasObject {
-			return container.NewVBox(widget.NewLabel("Name"), widget.NewLabel("Duration"))
-		},
-		func(id widget.ListItemID, item fyne.CanvasObject) {
-			box := item.(*fyne.Container)
-			clip := s.library[id]
-			box.Objects[0].(*widget.Label).SetText(clip.Name)
-			box.Objects[1].(*widget.Label).SetText(fmt.Sprintf("%s · %s", timecode(clip.Duration()), filepath.Ext(clip.Path)))
-		},
+		func() fyne.CanvasObject { return newLibraryRow(s) },
+		func(id widget.ListItemID, item fyne.CanvasObject) { item.(*LibraryRow).setClip(id) },
 	)
 	s.mediaList.OnSelected = func(id widget.ListItemID) { s.libraryChoice = id }
 	mediaPanel := container.NewBorder(
 		container.NewVBox(widget.NewLabelWithStyle("MEDIA LIBRARY", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel("Imported files remain unchanged"), widget.NewButtonWithIcon("Import video", theme.FolderOpenIcon(), s.importFile)),
+			widget.NewLabel("Drop files here · drag clips to timeline"), widget.NewButtonWithIcon("Import video", theme.FolderOpenIcon(), s.importFile)),
 		container.NewVBox(widget.NewButtonWithIcon("Insert at playhead", theme.ContentAddIcon(), s.insertClip),
 			widget.NewLabel("Insert uses the red playhead position.")), nil, nil, s.mediaList)
 
 	s.playButton = widget.NewButtonWithIcon("Play", theme.MediaPlayIcon(), s.togglePlayback)
+	s.previewNotes = widget.NewLabel("In-editor playback: 15 fps preview; mpv synchronizes audio")
+	previewMode := widget.NewCheck("Play video in editor (beta)", func(on bool) {
+		s.stopPlayer()
+		s.embeddedPreview = on
+		if on {
+			s.previewNotes.SetText("In-editor playback: 15 fps preview; mpv synchronizes audio")
+		} else {
+			s.previewNotes.SetText("Classic playback: mpv opens a separate video window")
+		}
+	})
+	previewMode.SetChecked(true)
 	previewPanel := container.NewBorder(
-		container.NewVBox(widget.NewLabelWithStyle("PREVIEW", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-			widget.NewLabel("Play launches an mpv video/audio preview window")),
+		container.NewVBox(widget.NewLabelWithStyle("PREVIEW", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), previewMode, s.previewNotes),
 		container.NewVBox(container.NewCenter(container.NewHBox(
 			widget.NewButtonWithIcon("Start", theme.MediaSkipPreviousIcon(), func() { s.pause(); s.seek(0) }),
 			s.playButton,
@@ -147,10 +208,12 @@ func (s *Studio) build() fyne.CanvasObject {
 	slider.Value = s.zoom
 	slider.Step = 5
 	slider.OnChanged = func(v float64) { s.zoom = v; s.timeline.Refresh(); s.timelineScroll.Refresh() }
-	zoomLine := container.NewBorder(nil, nil, editingToolbar, nil, slider)
+	snapCheck := widget.NewCheck("Snap to cuts", func(on bool) { s.snapping = on })
+	snapCheck.SetChecked(true)
+	zoomLine := container.NewBorder(nil, nil, container.NewHBox(editingToolbar, snapCheck), nil, slider)
 	timelinePanel := container.NewBorder(
 		container.NewVBox(widget.NewLabelWithStyle("TIMELINE · VIDEO 1", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), zoomLine),
-		widget.NewLabel("Click ruler to seek  •  Drag edges to trim  •  Drag body to reorder  •  Audio waveforms are shown below thumbnails"),
+		widget.NewLabel("Drop library clips to insert  •  S split  •  Space play/pause  •  Drag edges to trim  •  Drag body to reorder"),
 		nil, nil, s.timelineScroll)
 	topPanel := container.NewHSplit(mediaPanel, previewPanel)
 	topPanel.Offset = 0.27
@@ -164,7 +227,7 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.saveProject),
 			widget.NewButtonWithIcon("Export MP4", theme.DownloadIcon(), s.exportMovie),
 		), widget.NewLabel("Non-destructive movie editor"))
-	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.2.0"), s.info), nil, nil, workspace)
+	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.3.0"), s.info), nil, nil, workspace)
 }
 
 func (s *Studio) id() string {
@@ -191,35 +254,109 @@ func (s *Studio) importFile() {
 		}
 		path := r.URI().Path()
 		_ = r.Close()
-		s.info.SetText("Inspecting " + filepath.Base(path) + "…")
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-			defer cancel()
-			meta, err := media.Probe(ctx, path)
-			fyne.Do(func() {
-				if err != nil {
-					s.problem(err)
-					return
-				}
-				abs, err := filepath.Abs(path)
-				if err != nil {
-					s.problem(err)
-					return
-				}
-				c := editor.Clip{ID: s.id(), Path: abs, Name: filepath.Base(path),
-					SourceStart: 0, SourceEnd: meta.Duration, SourceDuration: meta.Duration, HasAudio: meta.HasAudio}
-				s.library = append(s.library, c)
-				s.libraryChoice = len(s.library) - 1
-				s.mediaList.Refresh()
-				s.mediaList.Select(s.libraryChoice)
-				s.info.SetText("Imported " + c.Name + " · choose Insert at playhead")
-				s.makeThumbnail(c)
-				s.makeWaveform(c)
-			})
-		}()
+		s.importPath(path, nil)
 	}, s.window)
 	dlg.SetFilter(storage.NewExtensionFileFilter([]string{".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}))
 	dlg.Show()
+}
+
+// importPath registers a video in the library. When fromTimeline is specified
+// it is also ripple-inserted at the drop time after metadata probing finishes.
+func (s *Studio) importPath(path string, fromTimeline *float64) {
+	if !isVideoPath(path) {
+		s.info.SetText("Unsupported video file: " + filepath.Base(path))
+		return
+	}
+	s.info.SetText("Inspecting " + filepath.Base(path) + "…")
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		meta, err := media.Probe(ctx, path)
+		fyne.Do(func() {
+			if err != nil {
+				s.problem(err)
+				return
+			}
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				s.problem(err)
+				return
+			}
+			c := editor.Clip{ID: s.id(), Path: abs, Name: filepath.Base(abs), SourceStart: 0, SourceEnd: meta.Duration, SourceDuration: meta.Duration, HasAudio: meta.HasAudio}
+			s.library = append(s.library, c)
+			s.libraryChoice = len(s.library) - 1
+			s.mediaList.Refresh()
+			s.mediaList.Select(s.libraryChoice)
+			s.makeThumbnail(c)
+			s.makeWaveform(c)
+			if fromTimeline != nil {
+				s.insertAt(*fromTimeline, c)
+			} else {
+				s.info.SetText("Imported " + c.Name + " · drag to timeline or choose Insert")
+			}
+		})
+	}()
+}
+
+func isVideoPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v":
+		return true
+	}
+	return false
+}
+
+func (s *Studio) importDroppedFiles(pos fyne.Position, uris []fyne.URI) {
+	at, overTimeline := s.timelineDropTime(pos)
+	for _, uri := range uris {
+		if uri.Scheme() != "file" {
+			continue
+		}
+		path := uri.Path()
+		if !isVideoPath(path) {
+			continue
+		}
+		if overTimeline {
+			drop := at
+			s.importPath(path, &drop)
+		} else {
+			s.importPath(path, nil)
+		}
+	}
+}
+
+// A timeline's absolute position accounts for horizontal scrolling; the scroll
+// viewport is used to reject drops outside its visible rectangle.
+func (s *Studio) timelineDropTime(pos fyne.Position) (float64, bool) {
+	viewport := fyne.CurrentApp().Driver().AbsolutePositionForObject(s.timelineScroll)
+	size := s.timelineScroll.Size()
+	if pos.X < viewport.X || pos.X > viewport.X+size.Width || pos.Y < viewport.Y || pos.Y > viewport.Y+size.Height {
+		return 0, false
+	}
+	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(s.timeline)
+	at := float64(pos.X-origin.X-rulerLeft) / s.zoom
+	at = math.Max(0, math.Min(at, s.project.Duration()))
+	return s.snapTime(at), true
+}
+
+func (s *Studio) dropLibraryClip(index int, pos fyne.Position) {
+	if index < 0 || index >= len(s.library) {
+		return
+	}
+	at, ok := s.timelineDropTime(pos)
+	if !ok {
+		s.info.SetText("Drop a library clip onto the video timeline to insert it")
+		return
+	}
+	c := s.library[index]
+	s.insertAt(at, c)
+}
+
+func (s *Studio) snapTime(at float64) float64 {
+	if !s.snapping || s.zoom <= 0 {
+		return at
+	}
+	return s.project.SnapTime(at, 8/s.zoom)
 }
 
 func (s *Studio) makeThumbnail(c editor.Clip) {
@@ -306,11 +443,15 @@ func (s *Studio) insertClip() {
 		dialog.ShowInformation("Choose a video", "Import a file and select it in the media library first.", s.window)
 		return
 	}
+	s.insertAt(s.playhead, s.library[s.libraryChoice])
+}
+
+func (s *Studio) insertAt(at float64, c editor.Clip) {
 	s.pause()
-	c := s.library[s.libraryChoice]
 	c.ID = s.id()
+	at = s.snapTime(at)
 	before := s.project.Clone()
-	index, err := s.project.InsertAtTime(s.playhead, c, s.id())
+	index, err := s.project.InsertAtTime(at, c, s.id())
 	if err != nil {
 		s.problem(err)
 		return
@@ -463,6 +604,72 @@ func (s *Studio) requestPreview() {
 	}()
 }
 
+// stopVideoStream terminates the bounded FFmpeg frame producer promptly.
+func (s *Studio) stopVideoStream() {
+	if s.previewVideoCancel != nil {
+		s.previewVideoCancel()
+		s.previewVideoCancel = nil
+	}
+	s.previewVideoFrames = nil
+	s.previewVideoNext = nil
+	s.previewVideoClip = -1
+	s.previewVideoStart = 0
+	s.previewVideoSourceStart = 0
+}
+
+// advanceVideoPreview runs on the Fyne thread. mpv's position remains the
+// authority; the frame producer is allowed to decode ahead but never dictates
+// playback speed. Cut changes restart decoding at the edited source in-point.
+func (s *Studio) advanceVideoPreview(at float64) {
+	if !s.embeddedPreview || !s.playing {
+		return
+	}
+	idx, source, ok := s.project.At(at)
+	if !ok {
+		return
+	}
+	if idx != s.previewVideoClip || at+0.1 < s.previewVideoStart {
+		s.stopVideoStream()
+		clip := s.project.Clips[idx]
+		ctx, cancel := context.WithCancel(context.Background())
+		frames, err := media.StreamFrames(ctx, clip.Path, source, clip.SourceEnd-source, 15)
+		if err != nil {
+			cancel()
+			s.info.SetText("Video preview unavailable: " + err.Error())
+			return
+		}
+		s.previewVideoCancel = cancel
+		s.previewVideoFrames = frames
+		s.previewVideoClip = idx
+		s.previewVideoStart = at
+		s.previewVideoSourceStart = source
+	}
+	// Consume only frames whose source timestamp is at or behind mpv's clock.
+	// Keep the first future packet for the next tick, preventing video from
+	// running ahead just because FFmpeg is decoding faster than real time.
+	for {
+		if s.previewVideoNext == nil {
+			select {
+			case packet, ok := <-s.previewVideoFrames:
+				if !ok {
+					s.previewVideoFrames = nil
+					return
+				}
+				s.previewVideoNext = &packet
+			default:
+				return
+			}
+		}
+		due := s.previewVideoStart + (s.previewVideoNext.SourceTime - s.previewVideoSourceStart)
+		if due > at+0.045 {
+			return
+		}
+		s.preview.Image = s.previewVideoNext.Image
+		s.preview.Refresh()
+		s.previewVideoNext = nil
+	}
+}
+
 func (s *Studio) togglePlayback() {
 	if s.playing {
 		s.pause()
@@ -475,6 +682,11 @@ func (s *Studio) togglePlayback() {
 		s.seek(0)
 	}
 	s.playing = true
+	s.previewSeq++
+	if s.previewCancel != nil {
+		s.previewCancel()
+	}
+	s.stopVideoStream()
 	s.playButton.SetText("Pause")
 	s.playButton.SetIcon(theme.MediaPauseIcon())
 	generation := s.playerGeneration
@@ -495,9 +707,15 @@ func (s *Studio) togglePlayback() {
 	}
 	snapshot := s.project.Clone()
 	at := s.playhead
-	s.info.SetText("Starting synchronized mpv preview…")
+	s.info.SetText("Starting synchronized preview…")
 	go func() {
-		player, err := media.StartPlayer(context.Background(), snapshot, at)
+		var player *media.Player
+		var err error
+		if s.embeddedPreview {
+			player, err = media.StartAudioPlayer(context.Background(), snapshot, at)
+		} else {
+			player, err = media.StartPlayer(context.Background(), snapshot, at)
+		}
 		fyne.Do(func() {
 			if generation != s.playerGeneration || !s.playing {
 				if player != nil {
@@ -511,7 +729,11 @@ func (s *Studio) togglePlayback() {
 				return
 			}
 			s.player = player
-			s.info.SetText("Playing in mpv window · timeline follows mpv's clock")
+			if s.embeddedPreview {
+				s.info.SetText("Playing in Fyne · mpv audio clock (beta)")
+			} else {
+				s.info.SetText("Playing in mpv window · timeline follows mpv's clock")
+			}
 			s.pollPlayer(player, generation)
 		})
 	}()
@@ -520,7 +742,7 @@ func (s *Studio) pollPlayer(player *media.Player, generation uint64) {
 	stop := make(chan struct{})
 	s.playbackStop = stop
 	go func() {
-		ticker := time.NewTicker(90 * time.Millisecond)
+		ticker := time.NewTicker(65 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
@@ -548,6 +770,7 @@ func (s *Studio) pollPlayer(player *media.Player, generation uint64) {
 				s.playhead = math.Max(0, math.Min(pos, s.project.Duration()))
 				s.clock.SetText(timecode(s.playhead) + " / " + timecode(s.project.Duration()))
 				s.timeline.Refresh()
+				s.advanceVideoPreview(s.playhead)
 			})
 		}
 	}()
@@ -557,6 +780,7 @@ func (s *Studio) pause() {
 		return
 	}
 	s.playing = false
+	s.stopVideoStream()
 	if s.player == nil {
 		s.playerGeneration++
 	} // stale asynchronous startup cannot adopt a player after pause
@@ -573,6 +797,7 @@ func (s *Studio) pause() {
 	s.requestPreview()
 }
 func (s *Studio) stopPlayer() {
+	s.stopVideoStream()
 	s.playerGeneration++
 	s.pause()
 	if s.player != nil {

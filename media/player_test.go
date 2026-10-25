@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/example/velvetcut/editor"
+	"github.com/SeraphinaDX/VelvetCut/editor"
 )
 
 func TestEDLCommasAndSemicolons(t *testing.T) {
