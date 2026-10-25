@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/example/velvetcut/editor"
+	"github.com/SeraphinaDX/VelvetCut/editor"
 )
 
 // EDL serializes the non-destructive timeline as an mpv virtual movie.
@@ -38,8 +38,8 @@ func EDL(p editor.Project) (string, error) {
 	return out.String(), nil
 }
 
-// Player runs mpv in a separate video window, using mpv's own decoder and audio
-// clock. The Fyne canvas is used for scrubbing thumbnails, not live video.
+// Player runs mpv as the A/V clock: with a video window in classic mode,
+// or audio-only when Fyne renders video frames in the editor.
 // All IPC is over an ephemeral local Unix socket in a private directory.
 type Player struct {
 	mu     sync.Mutex
@@ -50,6 +50,17 @@ type Player struct {
 }
 
 func StartPlayer(ctx context.Context, project editor.Project, at float64) (*Player, error) {
+	return startPlayer(ctx, project, at, false)
+}
+
+// StartAudioPlayer uses mpv for synchronized audio while FFmpeg streams frames
+// to Fyne. If an mpv EDL fails with mixed silent/audio clips, users can switch
+// back to the classic mpv video window.
+func StartAudioPlayer(ctx context.Context, project editor.Project, at float64) (*Player, error) {
+	return startPlayer(ctx, project, at, true)
+}
+
+func startPlayer(ctx context.Context, project editor.Project, at float64, audioOnly bool) (*Player, error) {
 	if _, err := exec.LookPath("mpv"); err != nil {
 		return nil, fmt.Errorf("install mpv for synchronized video/audio preview: %w", err)
 	}
@@ -68,7 +79,13 @@ func StartPlayer(ctx context.Context, project editor.Project, at float64) (*Play
 		return nil, err
 	}
 	sock := filepath.Join(dir, "ipc.sock")
-	args := []string{"--no-config", "--force-window=yes", "--idle=no", "--keep-open=yes", "--osc=no", "--input-terminal=no", "--title=VelvetCut Preview", "--input-ipc-server=" + sock, "--start=" + strconv.FormatFloat(at, 'f', 5, 64), edl}
+	args := []string{"--no-config", "--idle=no", "--keep-open=yes", "--osc=no", "--input-terminal=no", "--title=VelvetCut Preview", "--input-ipc-server=" + sock, "--start=" + strconv.FormatFloat(at, 'f', 5, 64)}
+	if audioOnly {
+		args = append(args, "--vid=no", "--force-window=no", "--audio-display=no")
+	} else {
+		args = append(args, "--force-window=yes")
+	}
+	args = append(args, edl)
 	cmd := exec.CommandContext(ctx, "mpv", args...)
 	if err := cmd.Start(); err != nil {
 		cleanup()

@@ -1,4 +1,4 @@
-module github.com/example/velvetcut
+module github.com/SeraphinaDX/VelvetCut
 
 go 1.22.0
 

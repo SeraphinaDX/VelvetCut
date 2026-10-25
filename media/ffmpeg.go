@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/example/velvetcut/editor"
+	"github.com/SeraphinaDX/VelvetCut/editor"
 )
 
 type Metadata struct {

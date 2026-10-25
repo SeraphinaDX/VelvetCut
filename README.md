@@ -1,117 +1,68 @@
-# VelvetCut 0.2.0
+# VelvetCut 0.3.0 (beta)
 
-**VelvetCut** is a GPL-3.0-or-later, non-destructive, iMovie-inspired video editor built with **Go and Fyne**. A purple-themed Fyne UI controls the clip library, timeline, editing and FFmpeg exporting.
+**VelvetCut** is a GPL-3.0-or-later non-destructive video editor inspired by iMovie, written in Go using Fyne. FFmpeg handles media analysis, streaming frames, and MP4 encoding; mpv provides a synchronized audio clock.
 
-> **Prototype status:** Importing, splitting, trimming, rearranging, saving, exporting, basic audio waveforms, titles, and fades are implemented. The synchronized real-time preview runs in a **separate mpv window**, not embedded in the Fyne editor. This is still an early editor, not an iMovie replacement.
+## What's new in 0.3.0
 
-## What's new in 0.2.0
+- **In-editor preview (beta):** Fyne displays continuously decoded frames (up to **15 fps**, 640×360) while mpv plays audio without opening a video window. This is an early preview path, **not yet full-frame-rate** or effects-accurate. The playhead follows mpv's actual clock. **Play video in editor (beta)** is on by default.
+- **Classic playback fallback:** Uncheck **Play video in editor (beta)** to restore the separate mpv video window used in 0.2.0. This is useful if the embedded preview lags or a source has incompatible media tracks.
+- **Drag videos from the file manager** onto VelvetCut: drops inside the visible timeline insert at that time; drops elsewhere add videos to the library.
+- **Drag clips from the media library to the timeline** to ripple-insert at the drop position. The original **Insert at playhead** action still works.
+- **Magnetic playhead snapping:** the timeline ruler, dragging the playhead and library insert positions snap to nearby cuts (8 logical pixels) with **Snap to cuts** enabled. This does not alter the actual source range during edge trimming.
+- **Keyboard shortcuts:** Space = play/pause, S = split at playhead, Delete / Backspace = remove selected clip, Left/Right arrows = step one frame (at 30 fps), Home/End = seek to start/end. Ctrl+Z / Ctrl+Y = undo/redo; Ctrl+S = save; Ctrl+O = open.
+- Fix the Go module import path to `github.com/SeraphinaDX/VelvetCut` (formerly the `github.com/example/velvetcut` placeholder).
 
-- **Synchronized live video and audio playback:** Launches a separate mpv playback window. mpv handles A/V sync, and the red Fyne timeline playhead follows mpv's actual playback timestamp via private local JSON IPC. Play/pause, timeline seeks, and close are controlled from VelvetCut. Editing invalidates a stale playback session so that the next play starts the new cut.
-- **Audio waveform** rendered underneath thumbnails when a clip contains audio. Peaks are computed by FFmpeg at low resolution on import and align with source in/out points.
-- **Clip title text:** Select a timeline clip → **Title & fades**. Titles appear as an overlay for the first three seconds of that clip in the exported movie. Unicode text and punctuation are supported; text is loaded from a safe temporary UTF-8 file.
-- **Fade in / fade out:** Apply 0.5s or 1s **fade from/to black and matching audio fade** to selected clips. These are **not clip-to-clip dissolves**.
-- Reusable mpv EDL timeline generator and additional model/export tests.
-- The editor continues to use still frames inside the Fyne pane when paused/scrubbing.
+## Other features
 
-## Original 0.1.0 features
+- Import MP4, MOV, MKV, WebM, AVI and M4V videos.
+- Non-destructive video clips, split at playhead, drag the in/out edges to trim, drag clips to reorder.
+- Timeline thumbnails and audio waveforms, zoom, undo/redo.
+- Apply a simple per-clip title or 0.5s / 1s fade in/out (currently visible in final MP4 exports only).
+- Save and load `.velvetcut` editable projects; existing 0.1.x and 0.2.x project files remain readable.
+- Export an MP4 using H.264 video (1280×720, 30fps) and AAC audio. FFmpeg will produce silent audio tracks for silent clips so that clips can mix successfully during export.
 
-- Import MP4, MOV, MKV, WebM, AVI and M4V video into a media library.
-- Insert a chosen clip **at the playhead**, automatically splitting the existing clip when needed.
-- Split at the playhead; drag **either edge** of a clip to trim the start/end; drag the middle to reorder.
-- Timeline thumbnails, zoom, playhead scrubbing, selecting and deleting clips, undo and redo.
-- Save/reopen `*.velvetcut` JSON project files (referencing the original video files).
-- Export 1280×720, 30 fps H.264 video and AAC audio to MP4. Clips without audio get a silent track. Exports are cancellable.
-- All edits are non-destructive. Source media remains unchanged.
+## Requirements
 
-## Dependencies
+- Go 1.22 or later; Fyne v2.8.1, compiler and Fyne OpenGL dependencies.
+- `ffmpeg` and `ffprobe` in PATH; FFmpeg requires `libx264`, AAC, drawtext for title export.
+- `mpv` in PATH for both preview modes.
 
-- Go **1.22+** (Fyne 2.8.1)
-- FFmpeg + FFprobe (including `libx264`, AAC, and `drawtext` filters)
-- **mpv** for real-time synchronized video/audio preview (not needed for still scrubbing or exporting)
-- A C compiler and desktop OpenGL development headers for Fyne
-
-### CachyOS / Arch Linux
+CachyOS / Arch Linux:
 
 ```sh
 sudo pacman -S --needed go ffmpeg mpv base-devel mesa libglvnd libx11 libxcursor libxrandr libxinerama libxi
 ```
 
-### Debian / Ubuntu
+Build and run:
 
 ```sh
-sudo apt install golang-go ffmpeg mpv gcc pkg-config libgl1-mesa-dev xorg-dev
-```
-
-Check `go version`: the repository requires Go >=1.22.
-
-## Build and launch
-
-```sh
-unzip velvetcut-0.2.0-source.zip
-cd velvetcut
-# Needs network access on first build to download Fyne dependencies.
 go mod tidy
 go run .
 ```
 
-Or:
-
-```sh
-go build -o velvetcut .
-./velvetcut
-```
-
-`go.mod` pins Fyne v2.8.1; the Go module is `github.com/example/velvetcut`, a placeholder until a real source repository is chosen.
-
-## Editing walkthrough
-
-1. Import one or more videos into the library.
-2. Select a library item, then **Insert at playhead**.
-3. Click the top timeline ruler to move the red playhead, then insert or **Split at playhead**.
-4. Drag the left grip to change where a clip begins in the source video, or the right grip to change where it ends. Drag the middle to rearrange clips.
-5. Click any clip and choose **Title & fades**. Set the title (optional) and fade in/out durations.
-6. Press **Play** to open synchronized playback in **mpv**. The editor's red playhead follows it. Press **Pause** to pause the movie. The Fyne preview pane is a still-image scrubber, not the live mpv player.
-7. **Save** your editable project and **Export MP4** for a finished video.
-
-The source paths in a saved project are absolute. Moving files can break references. `*.velvetcut` v1 project files from VelvetCut 0.1.0 remain readable. Title and fade parameters are optional additive JSON properties on each clip.
-
-## Important limitations
-
-- Playback opens in a **separate mpv window** because native full-speed video embedding in Fyne would require substantially more plumbing, possibly `libmpv`/native window handles. The editor's in-app image pane is **silent, still-image scrubbing** (4 fps sampling), not the live stream.
-- Title and fade effects appear in **MP4 export**, **not live mpv playback**; the live playback shows the plain source cuts/trims. This is intentional and should be addressed by a composited-preview renderer in a future release.
-- mpv's EDL can struggle with heterogeneous media tracks (for example mixing silent videos and videos with audio) or certain codecs. The **FFmpeg export path** explicitly handles mixed sound/no-sound clips and has an integration test for that case.
-- No overlapping video tracks, detached music track, clip-to-clip cross-dissolves, video effects, titles with animated templates, or keyframing yet.
-- Export is fixed at 1280×720 / 30 fps and letterboxes inputs as needed.
-- Title overlay requires FFmpeg built with the `drawtext` filter and suitable system fonts.
-- Long timelines may become slow to display as Fyne objects; virtualization will be needed for large projects.
-- Linux/Unix mpv preview uses a private Unix-domain socket. Windows/macOS playback support has **not** been tested.
-
-## Tests
+Tests independent of Fyne's GUI dependencies:
 
 ```sh
 go test ./editor ./media
 ```
 
-These tests don't need Fyne. `media` integration tests create real sample videos with FFmpeg and verify mixed sound/silence export, title and fade export, audio waveform creation, and mpv EDL serialization. `mpv` itself is not launched by the tests.
+## Important limitations
 
-**Build verification:** The editor and media packages pass tests in the development environment. The full Fyne app could not be compiled or run there because the Go module dependencies cannot be downloaded and OpenGL headers are unavailable. Its GUI and mpv integration require hands-on validation on a desktop.
+- The in-editor preview is **experimental**. It currently decodes only up to 15 fps at 640×360, and the actual frame rate depends on your CPU and UI performance. Audio is handled separately by mpv, with the mpv clock governing which decoded frame is displayed; synchronization is approximate.
+- In-editor playback is not a full compositor: clip titles and fades appear on **export**, not in live playback. Full-resolution, effects-accurate live compositing is future work.
+- mpv's EDL format can struggle with some combinations of silent and audio-containing media. If the in-editor audio-only player has trouble, turn off **Play video in editor (beta)** for classic external mpv video/audio playback.
+- Drag-and-drop behavior and live preview require a desktop test. External drop placement in Fyne v2.8.x has a known Windows issue; Linux is the initial target.
+- No clip-to-clip dissolves, music tracks, multi-layer video compositing, or automatic proxy generation yet.
+- Saved projects reference absolute media paths: moving the originals can break links.
 
-To generate sample video assets:
+## Source layout
 
-```sh
-./scripts/make-demo-clips.sh
-```
+- `main.go`: Fyne editor, shortcuts, OS drops, playback, MP4 export.
+- `library.go`: media library row dragging.
+- `timeline.go`: timeline drawing, trim/reorder drag handling, snap-to-cut seeks.
+- `editor/project.go`, `editor/snap.go`: non-destructive project operations, snapping.
+- `media/ffmpeg.go`: metadata, still frames, exporting.
+- `media/stream.go`: bounded incremental FFmpeg frame stream.
+- `media/player.go`: separate-video and audio-only mpv playback with IPC.
 
-## Layout
-
-- `main.go`: Fyne app, media library, editing actions, export UI, mpv controls
-- `timeline.go`: drag-to-trim/reorder timeline, thumbnail and waveform drawing
-- `editor/project.go`: non-destructive clip edit model
-- `media/ffmpeg.go`: frame extraction, metadata, final MP4 encoding
-- `media/player.go`: mpv EDL generation, separate-window preview and local IPC
-- `media/waveform.go`: low-resolution audio peak calculation
-- `editor/*_test.go`, `media/*_test.go`: model and FFmpeg tests
-
-## License
-
-GPL-3.0-or-later. See `COPYING`.
+Licensed GPL-3.0-or-later; see `COPYING`.

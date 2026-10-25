@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/velvetcut/editor"
+	"github.com/SeraphinaDX/VelvetCut/editor"
 )
 
 func TestExportMixedSoundAndSilentClips(t *testing.T) {

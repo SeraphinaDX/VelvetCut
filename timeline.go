@@ -170,6 +170,13 @@ func (t *Timeline) redraw() {
 		}
 		elapsed += clip.Duration()
 	}
+	// Visible cut boundaries make snap targets clear while editing.
+	elapsed = 0
+	for _, clip := range s.project.Clips {
+		elapsed += clip.Duration()
+		x := rulerLeft + float32(elapsed*s.zoom)
+		addLine(&objects, color.NRGBA{R: 223, G: 201, B: 249, A: 180}, x, stripTop-6, x, stripTop+stripHeight+6, 1)
+	}
 	if len(s.project.Clips) == 0 {
 		addLabel(&objects, "Your movie starts here · Import, then insert clips", subdued, rulerLeft+22, stripTop+24, 14)
 	}
@@ -210,7 +217,7 @@ func (t *Timeline) MouseDown(e *desktop.MouseEvent) {
 	t.dragged = false
 	if e.Position.Y < stripTop || e.Position.Y > stripTop+stripHeight {
 		t.mode = "seek"
-		s.seek((float64(e.Position.X - rulerLeft)) / s.zoom)
+		s.seek(s.snapTime((float64(e.Position.X - rulerLeft)) / s.zoom))
 		return
 	}
 	idx, local := t.clipAt(e.Position.X)
@@ -228,14 +235,14 @@ func (t *Timeline) MouseDown(e *desktop.MouseEvent) {
 		s.remember()
 	} else {
 		t.mode = "move"
-		s.seek((float64(e.Position.X - rulerLeft)) / s.zoom)
+		s.seek(s.snapTime((float64(e.Position.X - rulerLeft)) / s.zoom))
 	}
 	s.changed("Selected " + s.project.Clips[idx].Name)
 }
 
 func (t *Timeline) MouseUp(e *desktop.MouseEvent) {
 	if t.mode == "seek" {
-		t.studio.seek(float64(e.Position.X-rulerLeft) / t.studio.zoom)
+		t.studio.seek(t.studio.snapTime(float64(e.Position.X-rulerLeft) / t.studio.zoom))
 	}
 	// For a drag the actual edit/reorder is committed in DragEnd.
 	if !t.dragged {
@@ -252,7 +259,7 @@ func (t *Timeline) Dragged(e *fyne.DragEvent) {
 	t.dragged = true
 	switch t.mode {
 	case "seek":
-		s.seek(float64(e.Position.X-rulerLeft) / s.zoom)
+		s.seek(s.snapTime(float64(e.Position.X-rulerLeft) / s.zoom))
 	case "left":
 		if err := s.project.TrimLeft(t.index, delta); err == nil {
 			s.changed("Trimming in-point")
