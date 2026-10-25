@@ -2,6 +2,10 @@
 
 **VelvetCut** is a GPL-3.0-or-later non-destructive video editor inspired by iMovie, written in Go using Fyne. FFmpeg handles media analysis, streaming frames, and MP4 encoding; mpv provides a synchronized audio clock.
 
+## Preview freeze hotfix
+
+The 0.3.0 beta in-editor video sometimes froze after its first frame while audio kept playing. FFmpeg now streams fixed-size RGBA frames rather than MJPEG frames that were incorrectly decoded across image boundaries. Run `go test ./media` for the continuous-frame regression test.
+
 ## What's new in 0.3.0
 
 - **In-editor preview (beta):** Fyne displays continuously decoded frames (up to **15 fps**, 640×360) while mpv plays audio without opening a video window. This is an early preview path, **not yet full-frame-rate** or effects-accurate. The playhead follows mpv's actual clock. **Play video in editor (beta)** is on by default.
