@@ -245,7 +245,7 @@ func (t *Timeline) MouseUp(e *desktop.MouseEvent) {
 
 func (t *Timeline) Dragged(e *fyne.DragEvent) {
 	s := t.studio
-	delta := float64(e.DraggedX) / s.zoom
+	delta := float64(e.Dragged.DX) / s.zoom
 	if delta == 0 {
 		return
 	}
@@ -262,7 +262,7 @@ func (t *Timeline) Dragged(e *fyne.DragEvent) {
 			s.changed("Trimming out-point")
 		}
 	case "move":
-		t.moveDX += float64(e.DraggedX)
+		t.moveDX += float64(e.Dragged.DX)
 		s.info.SetText(fmt.Sprintf("Repositioning %s…", s.project.Clips[t.index].Name))
 		t.Refresh()
 	}
