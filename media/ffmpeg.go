@@ -1,0 +1,174 @@
+// Package media bridges VelvetCut's edit model to FFmpeg and FFprobe.
+// Command arguments are passed directly (never through a shell).
+package media
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/example/velvetcut/editor"
+)
+
+type Metadata struct {
+	Duration float64
+	HasAudio bool
+}
+
+func CheckTools() error {
+	for _, tool := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%s not found in PATH: %w", tool, err)
+		}
+	}
+	return nil
+}
+
+func Probe(ctx context.Context, path string) (Metadata, error) {
+	var response struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+			Duration  string `json:"duration"`
+		} `json:"streams"`
+	}
+	data, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,duration", "-of", "json", path).Output()
+	if err != nil {
+		return Metadata{}, fmt.Errorf("ffprobe %s: %w", filepath.Base(path), err)
+	}
+	if err = json.Unmarshal(data, &response); err != nil {
+		return Metadata{}, err
+	}
+	duration, _ := strconv.ParseFloat(response.Format.Duration, 64)
+	meta := Metadata{Duration: duration}
+	hasVideo := false
+	for _, s := range response.Streams {
+		if s.CodecType == "video" {
+			hasVideo = true
+			if duration <= 0 {
+				duration, _ = strconv.ParseFloat(s.Duration, 64)
+				meta.Duration = duration
+			}
+		}
+		if s.CodecType == "audio" {
+			meta.HasAudio = true
+		}
+	}
+	if !hasVideo || meta.Duration < editor.MinClipLength {
+		return Metadata{}, errors.New("file has no usable video stream or duration")
+	}
+	return meta, nil
+}
+
+func Frame(ctx context.Context, path string, at float64) (image.Image, error) {
+	args := []string{"-hide_banner", "-loglevel", "error", "-ss", seconds(at), "-i", path,
+		"-frames:v", "1", "-vf", "scale=960:540:force_original_aspect_ratio=decrease",
+		"-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"}
+	data, err := exec.CommandContext(ctx, "ffmpeg", args...).Output()
+	if err != nil {
+		return nil, fmt.Errorf("extract frame: %w", err)
+	}
+	frame, _, err := image.Decode(bytes.NewReader(data))
+	return frame, err
+}
+
+func seconds(n float64) string { return strconv.FormatFloat(n, 'f', 6, 64) }
+
+// Export creates one H.264/AAC MP4 with cuts, trims, audio, and normalized sizes.
+// Each source input is separately sought, including repeated portions of a file.
+func Export(ctx context.Context, project editor.Project, output string) error {
+	if err := project.Validate(); err != nil {
+		return err
+	}
+	if len(project.Clips) == 0 {
+		return errors.New("nothing to export")
+	}
+	if output == "" {
+		return errors.New("output filename is empty")
+	}
+	if err := CheckTools(); err != nil {
+		return err
+	}
+	for _, clip := range project.Clips {
+		if _, err := os.Stat(clip.Path); err != nil {
+			return fmt.Errorf("missing source %q: %w", clip.Path, err)
+		}
+	}
+	// Store titles in UTF-8 files instead of embedding untrusted text in a filtergraph.
+	// That preserves punctuation, quotes, non-ASCII letters, and literal colons.
+	titlesDir, err := os.MkdirTemp("", "velvetcut-titles-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(titlesDir)
+	args := []string{"-hide_banner", "-y", "-loglevel", "error"}
+	var filters []string
+	var concat strings.Builder
+	for i, clip := range project.Clips {
+		duration := clip.Duration()
+		args = append(args, "-ss", seconds(clip.SourceStart), "-t", seconds(duration), "-i", clip.Path)
+		video := fmt.Sprintf("[%d:v:0]fps=30,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS", i)
+		if clip.FadeIn > 0 {
+			video += ",fade=t=in:st=0:d=" + seconds(clip.FadeIn)
+		}
+		if clip.FadeOut > 0 {
+			video += ",fade=t=out:st=" + seconds(duration-clip.FadeOut) + ":d=" + seconds(clip.FadeOut)
+		}
+		if clip.Title != "" {
+			filename := filepath.Join(titlesDir, fmt.Sprintf("title-%d.txt", i))
+			if err := os.WriteFile(filename, []byte(clip.Title), 0600); err != nil {
+				return err
+			}
+			video += fmt.Sprintf(",drawtext=textfile=%s:expansion=none:fontcolor=white:fontsize=58:box=1:boxcolor=black@0.5:boxborderw=18:x=(w-text_w)/2:y=h*0.76:enable='lt(t,%s)'", filename, seconds(math.Min(3, duration)))
+		}
+		filters = append(filters, video+fmt.Sprintf("[v%d]", i))
+		var audio string
+		if clip.HasAudio {
+			audio = fmt.Sprintf("[%d:a:0]aresample=48000,apad,atrim=duration=%s,asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:channel_layouts=stereo", i, seconds(duration))
+		} else {
+			audio = fmt.Sprintf("anullsrc=r=48000:cl=stereo,atrim=duration=%s,asetpts=PTS-STARTPTS", seconds(duration))
+		}
+		if clip.FadeIn > 0 {
+			audio += ",afade=t=in:st=0:d=" + seconds(clip.FadeIn)
+		}
+		if clip.FadeOut > 0 {
+			audio += ",afade=t=out:st=" + seconds(duration-clip.FadeOut) + ":d=" + seconds(clip.FadeOut)
+		}
+		filters = append(filters, audio+fmt.Sprintf("[a%d]", i))
+		fmt.Fprintf(&concat, "[v%d][a%d]", i, i)
+	}
+	filters = append(filters, fmt.Sprintf("%sconcat=n=%d:v=1:a=1[outv][outa]", concat.String(), len(project.Clips)))
+	args = append(args, "-filter_complex", strings.Join(filters, ";"), "-map", "[outv]", "-map", "[outa]",
+		"-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	var log bytes.Buffer
+	cmd.Stderr = &log
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("ffmpeg export failed: %w\n%s", err, tail(log.String(), 2500))
+	}
+	return nil
+}
+
+func tail(s string, n int) string {
+	if len(s) > n {
+		return s[len(s)-n:]
+	}
+	return s
+}
