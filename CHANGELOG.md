@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 beta preview hotfix — 2026-10-25
+
+- Fix the in-editor preview freezing after one frame while audio and playhead continued. The FFmpeg streaming backend now reads fixed-size RGBA frames instead of concatenated MJPEG images, where the JPEG decoder could consume bytes belonging to the next frame.
+- Limit frame buffering to two decoded images; catch up to the mpv clock with at most one Fyne canvas refresh per poll.
+- Add an FFmpeg regression test for sustained frame progression and aspect-ratio-safe portrait videos.
+
+
 ## 0.3.0 (beta) — 2026-10-25
 
 - Add experimental in-editor 15 fps video preview, using incremental FFmpeg MJPEG frame decoding and mpv audio clock. Preserve classic separate-window mpv playback as fallback.

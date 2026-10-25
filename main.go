@@ -644,9 +644,16 @@ func (s *Studio) advanceVideoPreview(at float64) {
 		s.previewVideoStart = at
 		s.previewVideoSourceStart = source
 	}
-	// Consume only frames whose source timestamp is at or behind mpv's clock.
-	// Keep the first future packet for the next tick, preventing video from
-	// running ahead just because FFmpeg is decoding faster than real time.
+	// Catch up with mpv's audio clock, drawing only the newest due frame.
+	// Refresh once per poll to avoid flooding Fyne with GPU texture uploads
+	// if the decoder has several overdue packets ready at once.
+	var displayed image.Image
+	defer func() {
+		if displayed != nil {
+			s.preview.Image = displayed
+			s.preview.Refresh()
+		}
+	}()
 	for {
 		if s.previewVideoNext == nil {
 			select {
@@ -664,8 +671,7 @@ func (s *Studio) advanceVideoPreview(at float64) {
 		if due > at+0.045 {
 			return
 		}
-		s.preview.Image = s.previewVideoNext.Image
-		s.preview.Refresh()
+		displayed = s.previewVideoNext.Image
 		s.previewVideoNext = nil
 	}
 }
