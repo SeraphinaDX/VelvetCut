@@ -1,6 +1,8 @@
 package media
 
 import (
+	"bytes"
+	"image"
 	"context"
 	"os"
 	"os/exec"
@@ -40,5 +42,39 @@ func TestStreamFrames(t *testing.T) {
 	}
 	if count < 2 || count > 8 {
 		t.Fatalf("unexpected frames: %d", count)
+	}
+}
+
+
+// Regression: JPEG image2pipe decoding used to return only the first frame.
+// Check that a continuous sample produces multiple different images.
+func TestStreamFramesContinuousAndPortrait(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil { t.Skip("requires ffmpeg") }
+	for _, tc := range []struct { name, size string }{
+		{"landscape", "160x90"},
+		{"portrait", "90x160"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			video := filepath.Join(t.TempDir(), "movie.mp4")
+			cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size="+tc.size+":rate=20:duration=2", "-c:v", "mpeg4", video)
+			if out, err := cmd.CombinedOutput(); err != nil { t.Fatalf("create video: %v %s", err, out) }
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			frames, err := StreamFrames(ctx, video, 0, 1, 10)
+			if err != nil { t.Fatal(err) }
+			var count int
+			var first, last []byte
+			for packet := range frames {
+				if got := packet.Image.Bounds(); got.Dx() != previewWidth || got.Dy() != previewHeight {
+					t.Fatalf("bad dimensions %v", got)
+				}
+				pix := packet.Image.(*image.RGBA).Pix
+				if count == 0 { first = append([]byte(nil), pix...) }
+				last = append(last[:0], pix...)
+				count++
+			}
+			if count < 8 || count > 12 { t.Fatalf("expected roughly ten frames, got %d", count) }
+			if bytes.Equal(first, last) { t.Fatal("video frames did not change") }
+		})
 	}
 }
