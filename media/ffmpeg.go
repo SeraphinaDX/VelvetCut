@@ -90,6 +90,16 @@ func seconds(n float64) string { return strconv.FormatFloat(n, 'f', 6, 64) }
 // Export creates one H.264/AAC MP4 with cuts, trims, audio, and normalized sizes.
 // Each source input is separately sought, including repeated portions of a file.
 func Export(ctx context.Context, project editor.Project, output string) error {
+    return exportWithProfile(ctx, project, output, 1280, 720, 30, "veryfast", "20")
+}
+
+// ExportPreview builds an effects-accurate 640x360 transition proxy.
+// The same filtergraph is used for final export and preview.
+func ExportPreview(ctx context.Context, project editor.Project, output string) error {
+    return exportWithProfile(ctx, project, output, 640, 360, 15, "ultrafast", "28")
+}
+
+func exportWithProfile(ctx context.Context, project editor.Project, output string, width, height, fps int, preset, crf string) error {
 	if err := project.Validate(); err != nil {
 		return err
 	}
@@ -116,11 +126,11 @@ func Export(ctx context.Context, project editor.Project, output string) error {
 	defer os.RemoveAll(titlesDir)
 	args := []string{"-hide_banner", "-y", "-loglevel", "error"}
 	var filters []string
-	var concat strings.Builder
+	
 	for i, clip := range project.Clips {
 		duration := clip.Duration()
 		args = append(args, "-ss", seconds(clip.SourceStart), "-t", seconds(duration), "-i", clip.Path)
-		video := fmt.Sprintf("[%d:v:0]fps=30,scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS", i)
+		video := fmt.Sprintf("[%d:v:0]setpts=PTS-STARTPTS,fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv444p,settb=1/%d", i, fps, width, height, width, height, fps)
 		if clip.FadeIn > 0 {
 			video += ",fade=t=in:st=0:d=" + seconds(clip.FadeIn)
 		}
@@ -148,12 +158,32 @@ func Export(ctx context.Context, project editor.Project, output string) error {
 			audio += ",afade=t=out:st=" + seconds(duration-clip.FadeOut) + ":d=" + seconds(clip.FadeOut)
 		}
 		filters = append(filters, audio+fmt.Sprintf("[a%d]", i))
-		fmt.Fprintf(&concat, "[v%d][a%d]", i, i)
+		
 	}
-	filters = append(filters, fmt.Sprintf("%sconcat=n=%d:v=1:a=1[outv][outa]", concat.String(), len(project.Clips)))
-	args = append(args, "-filter_complex", strings.Join(filters, ";"), "-map", "[outv]", "-map", "[outa]",
-		"-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-		"-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", output)
+    // Join segments one boundary at a time. Real transitions overlap their
+    // neighboring clips by d seconds, while ordinary cuts concatenate.
+    // Both video and audio crossfade over exactly the same duration.
+    videoTrack, audioTrack := "[v0]", "[a0]"
+    built := project.Clips[0].Duration()
+    for i := 1; i < len(project.Clips); i++ {
+        d := project.Clips[i-1].TransitionOut.Duration
+        v, a := fmt.Sprintf("[joinedv%d]",i),fmt.Sprintf("[joineda%d]",i)
+        if d > 0 {
+            effect := "fade"
+            if project.Clips[i-1].TransitionOut.Kind == "black" { effect="fadeblack" }
+            filters=append(filters,fmt.Sprintf("%s[v%d]xfade=transition=%s:duration=%s:offset=%s%s",videoTrack,i,effect,seconds(d),seconds(built-d),v))
+            filters=append(filters,fmt.Sprintf("%s[a%d]acrossfade=d=%s:c1=tri:c2=tri%s",audioTrack,i,seconds(d),a))
+            built += project.Clips[i].Duration()-d
+        } else {
+            filters=append(filters,fmt.Sprintf("%s%s[v%d][a%d]concat=n=2:v=1:a=1%s%s",videoTrack,audioTrack,i,i,v,a))
+            built += project.Clips[i].Duration()
+        }
+        videoTrack, audioTrack=v,a
+    }
+    args = append(args, "-filter_complex", strings.Join(filters, ";"), "-map", videoTrack, "-map", audioTrack,
+        "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", output)
+
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	var log bytes.Buffer
 	cmd.Stderr = &log

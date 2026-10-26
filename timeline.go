@@ -105,9 +105,11 @@ func (t *Timeline) redraw() {
 		}
 		addLine(&objects, subdued, x, stripTop-8-size, x, stripTop-8, 1)
 	}
-	var elapsed float64
-	for index, clip := range s.project.Clips {
-		x := rulerLeft + float32(elapsed*s.zoom)
+	starts := make([]float64, len(s.project.Clips))
+    var clipStart float64
+    for index, clip := range s.project.Clips {
+        starts[index]=clipStart
+        x := rulerLeft + float32(clipStart*s.zoom)
 		w := float32(clip.Duration() * s.zoom)
 		col := color.NRGBA{R: 65, G: 79, B: 128, A: 255}
 		if index%2 == 1 {
@@ -127,7 +129,7 @@ func (t *Timeline) redraw() {
 		// Sparse amplitude envelope over the lower half of each video clip.
 		// Source-range offsets keep peaks aligned during left/right trimming.
 		if peaks, ok := s.waveforms[clip.Path]; ok && len(peaks) > 0 && w > 14 && clip.SourceDuration > 0 {
-			step := float32(4)
+			step := float32(math.Max(4, float64(w/200)))
 			mid := stripTop + stripHeight - 19
 			maxh := float32(15)
 			for px := float32(5); px < w-5; px += step {
@@ -168,15 +170,32 @@ func (t *Timeline) redraw() {
 			addLine(&objects, purple, x, stripTop, x+w, stripTop, 2)
 			addLine(&objects, purple, x, stripTop+stripHeight, x+w, stripTop+stripHeight, 2)
 		}
-		elapsed += clip.Duration()
+		clipStart+=clip.Duration()-clip.TransitionOut.Duration
 	}
-	// Visible cut boundaries make snap targets clear while editing.
-	elapsed = 0
-	for _, clip := range s.project.Clips {
-		elapsed += clip.Duration()
-		x := rulerLeft + float32(elapsed*s.zoom)
-		addLine(&objects, color.NRGBA{R: 223, G: 201, B: 249, A: 180}, x, stripTop-6, x, stripTop+stripHeight+6, 1)
-	}
+    // Mark real clip overlaps with a visible, draggable purple transition.
+    for i, clip := range s.project.Clips {
+        if i+1==len(s.project.Clips) {break}
+        d:=clip.TransitionOut.Duration
+        if d<=0 {
+            cut:=starts[i+1]+d/2
+            x:=rulerLeft+float32(cut*s.zoom)
+            addLine(&objects,color.NRGBA{R:223,G:201,B:249,A:180},x,stripTop-6,x,stripTop+stripHeight+6,1)
+            continue
+        }
+        x:=rulerLeft+float32(starts[i+1]*s.zoom)
+        w:=float32(d*s.zoom)
+        addRect(&objects,color.NRGBA{R:49,G:25,B:86,A:235},x,stripTop,w,stripHeight)
+        for stripe:=float32(4);stripe<w-2;stripe+=10 {
+            addLine(&objects,color.NRGBA{R:201,G:160,B:251,A:185},x+stripe,stripTop+4,x+stripe,stripTop+stripHeight-4,1)
+        }
+        tag:="⇄"
+        if clip.TransitionOut.Kind=="black" {tag="◈"}
+        addLabel(&objects,tag,pale,x+w/2-6,stripTop+20,16)
+        if w>=55 {addLabel(&objects,fmt.Sprintf("%.2fs",d),pale,x+6,stripTop+52,11)}
+        addLine(&objects,purple,x,stripTop-5,x,stripTop+stripHeight+5,2)
+        addLine(&objects,purple,x+w,stripTop-5,x+w,stripTop+stripHeight+5,2)
+    }
+
 	if len(s.project.Clips) == 0 {
 		addLabel(&objects, "Your movie starts here · Import, then insert clips", subdued, rulerLeft+22, stripTop+24, 14)
 	}
@@ -193,16 +212,26 @@ func (t *Timeline) redraw() {
 	t.root.Refresh()
 }
 
+func (t *Timeline) transitionAt(x float32) int {
+    s:=t.studio
+    for i,c:=range s.project.Clips {
+        if i+1>=len(s.project.Clips)||!c.TransitionOut.Active() {continue}
+        start:=rulerLeft+float32(s.project.Start(i+1)*s.zoom)
+        w:=float32(c.TransitionOut.Duration*s.zoom)
+        if x>=start-3 && x<=start+w+3 {return i}
+    }
+    return -1
+}
+
 func (t *Timeline) clipAt(x float32) (index int, localX float32) {
-	elapsed := float32(rulerLeft)
-	for i, c := range t.studio.project.Clips {
-		end := elapsed + float32(c.Duration()*t.studio.zoom)
-		if x >= elapsed && x < end {
-			return i, x - elapsed
-		}
-		elapsed = end
-	}
-	return -1, 0
+    // Incoming clips appear on top of overlapping outgoing footage.
+    for i:=len(t.studio.project.Clips)-1;i>=0;i-- {
+        c:=t.studio.project.Clips[i]
+        start:=rulerLeft+float32(t.studio.project.Start(i)*t.studio.zoom)
+        end:=start+float32(c.Duration()*t.studio.zoom)
+        if x>=start&&x<end {return i,x-start}
+    }
+    return -1,0
 }
 
 func (t *Timeline) MouseDown(e *desktop.MouseEvent) {
@@ -220,7 +249,15 @@ func (t *Timeline) MouseDown(e *desktop.MouseEvent) {
 		s.seek(s.snapTime((float64(e.Position.X - rulerLeft)) / s.zoom))
 		return
 	}
-	idx, local := t.clipAt(e.Position.X)
+	if idx:=t.transitionAt(e.Position.X);idx>=0 {
+        t.index=idx
+        s.selected=idx
+        t.mode="transition"
+        s.remember()
+        s.changed("Drag left/right to adjust transition length")
+        return
+    }
+    idx, local := t.clipAt(e.Position.X)
 	if idx < 0 {
 		return
 	}
@@ -260,7 +297,15 @@ func (t *Timeline) Dragged(e *fyne.DragEvent) {
 	switch t.mode {
 	case "seek":
 		s.seek(s.snapTime(float64(e.Position.X-rulerLeft) / s.zoom))
-	case "left":
+	case "transition":
+        if t.index>=0 && t.index+1<len(s.project.Clips) {
+            trans:=s.project.Clips[t.index].TransitionOut
+            next:=trans.Duration+delta
+            if next<0.1 { _=s.project.SetTransition(t.index,"",0) } else if err:=s.project.SetTransition(t.index,trans.Kind,next);err==nil {
+                s.changed("Adjusting "+trans.Kind+" transition")
+            }
+        }
+    case "left":
 		if err := s.project.TrimLeft(t.index, delta); err == nil {
 			s.changed("Trimming in-point")
 		}
@@ -281,15 +326,13 @@ func (t *Timeline) DragEnd() {
 		from := t.index
 		center := s.project.Start(from) + s.project.Clips[from].Duration()/2 + t.moveDX/s.zoom
 		destination := 0
-		var cursor float64
 		for i, c := range s.project.Clips {
 			if i == from {
 				continue
 			}
-			if center > cursor+c.Duration()/2 {
+			if center > s.project.Start(i)+c.Duration()/2 {
 				destination++
 			}
-			cursor += c.Duration()
 		}
 		if destination != from {
 			s.remember()

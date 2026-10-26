@@ -1,10 +1,23 @@
-# VelvetCut 0.3.0 (beta)
+# VelvetCut 0.4.0 (beta)
 
 **VelvetCut** is a GPL-3.0-or-later non-destructive video editor inspired by iMovie, written in Go using Fyne. FFmpeg handles media analysis, streaming frames, and MP4 encoding; mpv provides a synchronized audio clock.
 
 ## Preview freeze hotfix
 
 The 0.3.0 beta in-editor video sometimes froze after its first frame while audio kept playing. FFmpeg now streams fixed-size RGBA frames rather than MJPEG frames that were incorrectly decoded across image boundaries. Run `go test ./media` for the continuous-frame regression test.
+
+## What's new in 0.4.0 (beta)
+
+- **Real clip-to-clip transitions:** Select a clip and choose **Transition ⇄** to apply **Cross dissolve** or **Fade through black** into the following clip. Enter the duration in seconds or drag the purple overlap region on the timeline to resize it.
+- **Matching audio:** Both video and audio crossfade across the overlap. A 0.75-second transition overlaps 0.75 seconds of outgoing/incoming video, shortening the finished movie by that amount.
+- **Effects-accurate playback:** On Play, when transitions exist, FFmpeg generates a temporary 640×360 / 15fps preview MP4 using the same video/audio graph as MP4 export. The Fyne preview and classic mpv-window mode then play the proxy. Proxies are reused while the project is unchanged.
+- **Edit safety:** Transition validation avoids impossible overlaps. Trimming may shorten adjacent transitions; moving clips clears affected transition settings rather than silently blending unrelated footage.
+- **Performance:** Timeline clip placement is linear, and the amount of waveform strokes per very long clip is capped.
+- **Backward compatibility:** Existing .velvetcut files remain readable; new transition fields are optional and source videos are untouched.
+
+**Try it:** Insert at least two clips, click the first, choose **Transition ⇄**, select Cross dissolve and enter 0.75 seconds. Press Play. The first playback will render a preview proxy before playing, and a later edit will regenerate it. **Pause** cancels a pending render. Final **Export MP4** renders in 1280×720 at 30fps.
+
+**Known limitations:** Long projects may take significant time and temporary disk space to render a transition preview. Full-speed in-editor compositing is not implemented; effects-accurate playback uses a low-resolution render first. The desktop Fyne/mpv integration needs testing on Linux. Existing fades/titles are visible in preview proxies only when the movie contains a transition; plain-cut EDL preview still omits those effects.
 
 ## What's new in 0.3.0
 

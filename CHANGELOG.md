@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 (beta) — 2026-10-25
+
+- Add overlapping cross-dissolves and fade-through-black at clip boundaries with synchronized audio crossfades.
+- Persist per-clip outgoing transition metadata and update non-destructive timeline duration, cuts and snapping.
+- Add a Transition dialog plus draggable purple timeline transition regions with length validation.
+- Cache low-resolution, effects-accurate MP4 preview proxies when a movie contains transitions, for Fyne or classic mpv.
+- Limit excessive waveform drawing and calculate clip positions in a linear timeline pass.
+- Preserve the 0.3.0 one-frame preview fix; add real FFmpeg transition and model tests.
+
+**Beta:** Building a transition preview renders the movie in the background before playback. Full Fyne GUI testing on Linux is still needed.
+
+
 ## 0.3.0 beta preview hotfix — 2026-10-25
 
 - Fix the in-editor preview freezing after one frame while audio and playhead continued. The FFmpeg streaming backend now reads fixed-size RGBA frames instead of concatenated MJPEG images, where the JPEG decoder could consume bytes belonging to the next frame.

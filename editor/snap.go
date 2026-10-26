@@ -14,8 +14,8 @@ func (p Project) SnapTime(at, tolerance float64) float64 {
 	if d := math.Abs(at - cut); d <= distance {
 		closest, distance = cut, d
 	}
-	for _, c := range p.Clips {
-		cut += c.Duration()
+	for i := range p.Clips {
+        if i+1<len(p.Clips) {cut=p.Cut(i)} else {cut=p.Duration()}
 		if d := math.Abs(at - cut); d <= distance {
 			closest, distance = cut, d
 		}
