@@ -107,17 +107,46 @@ func visualFilters(clip editor.Clip, width, height, fps int, titleFile string, s
 		case "slide":
 			x = fmt.Sprintf("if(lt(t\\,0.5)\\,-text_w+(%s+text_w)*t/0.5\\,%s)", x, x)
 		case "zoom":
+			if len(clip.TitleKeyframes) > 0 {
+				break
+			}
 			// drawtext evaluates fontsize expressions at each frame.
 			sizeExpr := fmt.Sprintf("'%s*(0.65+0.35*min(t/0.4\\,1))'", seconds(size))
 			alpha = ""
 			parts = append(parts, fmt.Sprintf("drawtext=font=%s:textfile=%s:expansion=none:fontcolor=%s:fontsize=%s:box=1:boxcolor=black@0.5:boxborderw=12:x='%s':y='%s':enable='lt(t,%s)'", font, titleFile, color, sizeExpr, x, y, seconds(limit)))
 		}
-		if v.TitleAnimation != "zoom" {
+		if len(clip.TitleKeyframes) > 0 {
+			// Keyframed motion overrides the old preset animation. Drawtext
+			// evaluates these expressions at each video frame, so export,
+			// effects proxy and paused stills all use the same interpolation.
+			x = "w*(" + keyframeExpression(clip.TitleKeyframes, func(k editor.TitleKeyframe) float64 { return k.X }) + ")-text_w/2"
+			y = "h*(" + keyframeExpression(clip.TitleKeyframes, func(k editor.TitleKeyframe) float64 { return k.Y }) + ")-text_h/2"
+			scale := keyframeExpression(clip.TitleKeyframes, func(k editor.TitleKeyframe) float64 { return k.Scale })
+			opacity := keyframeExpression(clip.TitleKeyframes, func(k editor.TitleKeyframe) float64 { return k.Opacity })
+			parts = append(parts, fmt.Sprintf("drawtext=font=%s:textfile=%s:expansion=none:fontcolor=%s:fontsize='%s*(%s)':alpha='%s':box=1:boxcolor=black@0.5:boxborderw=12:x='%s':y='%s':enable='lt(t,%s)'", font, titleFile, color, seconds(size), scale, opacity, x, y, seconds(limit)))
+		} else if v.TitleAnimation != "zoom" {
 			parts = append(parts, fmt.Sprintf("drawtext=font=%s:textfile=%s:expansion=none:fontcolor=%s:fontsize=%s:box=1:boxcolor=black@0.5:boxborderw=12:x='%s':y='%s'%s:enable='lt(t,%s)'", font, titleFile, color, seconds(size), x, y, alpha, seconds(limit)))
 		}
 	}
 	parts = append(parts, fmt.Sprintf("format=yuv444p,settb=1/%d", fps))
 	return strings.Join(parts, ",")
+}
+
+// keyframeExpression emits one piecewise-linear FFmpeg expression. Escaped
+// commas are required because drawtext is inside a filter_complex graph.
+// Times are clip-local, and values hold outside the keyframe range.
+func keyframeExpression(keys []editor.TitleKeyframe, value func(editor.TitleKeyframe) float64) string {
+	if len(keys) == 0 {
+		return "0"
+	}
+	expr := seconds(value(keys[len(keys)-1]))
+	for i := len(keys) - 2; i >= 0; i-- {
+		a, b := keys[i], keys[i+1]
+		span := b.Time - a.Time
+		interp := fmt.Sprintf("(%s+(%s-%s)*(t-%s)/%s)", seconds(value(a)), seconds(value(b)), seconds(value(a)), seconds(a.Time), seconds(span))
+		expr = fmt.Sprintf("if(lt(t\\,%s)\\,%s\\,if(lt(t\\,%s)\\,%s\\,%s))", seconds(a.Time), seconds(value(a)), seconds(b.Time), interp, expr)
+	}
+	return expr
 }
 
 func makeTitleFile(dir string, index int, text string) (string, error) {

@@ -13,20 +13,21 @@ const MinClipLength = 0.15
 var ErrOutsideClip = errors.New("playhead must be inside a clip, away from its edges")
 
 type Clip struct {
-	ID             string         `json:"id"`
-	Path           string         `json:"path"`
-	Name           string         `json:"name"`
-	SourceStart    float64        `json:"source_start"`
-	SourceEnd      float64        `json:"source_end"`
-	SourceDuration float64        `json:"source_duration"`
-	HasAudio       bool           `json:"has_audio"`
-	AudioMuted     bool           `json:"audio_muted,omitempty"`
-	AudioVolume    *float64       `json:"audio_volume,omitempty"`
-	Title          string         `json:"title,omitempty"`
-	FadeIn         float64        `json:"fade_in,omitempty"`
-	FadeOut        float64        `json:"fade_out,omitempty"`
-	TransitionOut  Transition     `json:"transition_out,omitempty"`
-	Visual         VisualSettings `json:"visual,omitempty"`
+	ID             string          `json:"id"`
+	Path           string          `json:"path"`
+	Name           string          `json:"name"`
+	SourceStart    float64         `json:"source_start"`
+	SourceEnd      float64         `json:"source_end"`
+	SourceDuration float64         `json:"source_duration"`
+	HasAudio       bool            `json:"has_audio"`
+	AudioMuted     bool            `json:"audio_muted,omitempty"`
+	AudioVolume    *float64        `json:"audio_volume,omitempty"`
+	Title          string          `json:"title,omitempty"`
+	FadeIn         float64         `json:"fade_in,omitempty"`
+	FadeOut        float64         `json:"fade_out,omitempty"`
+	TransitionOut  Transition      `json:"transition_out,omitempty"`
+	Visual         VisualSettings  `json:"visual,omitempty"`
+	TitleKeyframes []TitleKeyframe `json:"title_keyframes,omitempty"`
 }
 
 func (c Clip) Duration() float64 { return c.SourceEnd - c.SourceStart }
@@ -38,7 +39,7 @@ func (c Clip) Valid() bool {
 		c.SourceEnd <= c.SourceDuration+1e-5 &&
 		isFinite(c.FadeIn) && isFinite(c.FadeOut) && c.FadeIn >= 0 && c.FadeOut >= 0 &&
 		c.FadeIn <= c.Duration()+1e-5 && c.FadeOut <= c.Duration()+1e-5 &&
-		isFinite(c.ClipAudioVolume()) && c.ClipAudioVolume() >= 0 && c.ClipAudioVolume() <= 2 && c.Visual.Valid()
+		isFinite(c.ClipAudioVolume()) && c.ClipAudioVolume() >= 0 && c.ClipAudioVolume() <= 2 && c.Visual.Valid() && titleKeyframesValid(c.TitleKeyframes, c.Duration())
 }
 
 func isFinite(f float64) bool { return !math.IsInf(f, 0) && !math.IsNaN(f) }
@@ -60,6 +61,7 @@ func (p Project) Clone() Project {
 			v := *clone.Clips[i].AudioVolume
 			clone.Clips[i].AudioVolume = &v
 		}
+		clone.Clips[i].TitleKeyframes = append([]TitleKeyframe(nil), clone.Clips[i].TitleKeyframes...)
 	}
 	return clone
 }
@@ -174,6 +176,9 @@ func (p *Project) SplitAt(t float64, newID string) (int, error) {
 		return -1, ErrOutsideClip
 	}
 	first, second := old, old
+	cut := sourceTime - old.SourceStart
+	first.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, 0, cut)
+	second.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, cut, old.Duration())
 	first.SourceEnd = sourceTime
 	second.SourceStart = sourceTime
 	first.FadeOut = 0
@@ -196,7 +201,9 @@ func (p *Project) TrimLeft(index int, delta float64) error {
 		return errors.New("invalid trim")
 	}
 	c := &p.Clips[index]
+	old := *c
 	c.SourceStart = clamp(c.SourceStart+delta, 0, c.SourceEnd-MinClipLength)
+	c.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, c.SourceStart-old.SourceStart, old.Duration())
 	c.FadeIn = math.Min(c.FadeIn, c.Duration())
 	c.FadeOut = math.Min(c.FadeOut, c.Duration())
 	p.normalizeTransitions()
@@ -209,7 +216,9 @@ func (p *Project) TrimRight(index int, delta float64) error {
 		return errors.New("invalid trim")
 	}
 	c := &p.Clips[index]
+	old := *c
 	c.SourceEnd = clamp(c.SourceEnd+delta, c.SourceStart+MinClipLength, c.SourceDuration)
+	c.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, 0, c.Duration())
 	c.FadeIn = math.Min(c.FadeIn, c.Duration())
 	c.FadeOut = math.Min(c.FadeOut, c.Duration())
 	p.normalizeTransitions()

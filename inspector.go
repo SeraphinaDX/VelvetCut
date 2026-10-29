@@ -30,6 +30,9 @@ type ClipInspector struct {
 	brightness, contrast, saturation, temperature *widget.Slider
 	effect, crop, rotation                        *widget.Select
 	zoom                                          *widget.Slider
+	motionScale, motionOpacity                    *widget.Slider
+	motionStatus                                  *widget.Label
+	motionBusy                                    bool
 }
 
 func inspectorSelect(options []string) *widget.Select {
@@ -91,7 +94,25 @@ func newClipInspector(studio *Studio) *ClipInspector {
 		labeledSlider("Center crop zoom", in.zoom, "%.2f ×"),
 		widget.NewLabel("Fit preserves the full image. Fill crops to the movie's aspect ratio. Square and 4:3 crop the source, then letterbox it."),
 	))
-	tabs := container.NewAppTabs(container.NewTabItem("Title", titles), container.NewTabItem("Colour", colour), container.NewTabItem("Effects", effects))
+	in.motionScale = inspectorSlider(0.25, 4, 0.05)
+	in.motionOpacity = inspectorSlider(0, 1, 0.05)
+	in.motionStatus = widget.NewLabel("Select a titled video clip to animate")
+	in.motionStatus.Wrapping = fyne.TextWrapWord
+	motion := container.NewVScroll(container.NewVBox(
+		widget.NewLabel("Drag the title guide in the preview to create a position keyframe."),
+		widget.NewLabel("At the playhead, set scale and opacity; click Add / update keyframe."),
+		in.motionStatus,
+		labeledSlider("Title size multiplier", in.motionScale, "%.2f ×"),
+		labeledSlider("Title opacity", in.motionOpacity, "%.0f%%"),
+		widget.NewButton("Add / update keyframe", in.putMotion),
+		container.NewGridWithColumns(2,
+			widget.NewButton("Previous keyframe", func() { in.jumpMotion(-1) }),
+			widget.NewButton("Next keyframe", func() { in.jumpMotion(1) }),
+			widget.NewButton("Remove at playhead", in.removeMotion),
+			widget.NewButton("Clear all keyframes", in.clearMotion)),
+		widget.NewLabel("Keyframes use clip-local time and interpolate linearly. They override legacy title entrance animations."),
+	))
+	tabs := container.NewAppTabs(container.NewTabItem("Title", titles), container.NewTabItem("Colour", colour), container.NewTabItem("Effects", effects), container.NewTabItem("Motion", motion))
 	tabs.SetTabLocation(container.TabLocationTop)
 	in.applyButton = widget.NewButton("Apply to selected clip", in.apply)
 	previewButton := widget.NewButton("Show clip", func() {
@@ -113,10 +134,12 @@ func (in *ClipInspector) loadSelection() {
 		in.selectedID = ""
 		in.header.SetText("Select a video clip")
 		in.applyButton.Disable()
+		in.refreshMotion()
 		return
 	}
 	c := s.project.Clips[s.selected]
 	if c.ID == in.selectedID && c.Visual == in.loadedVisual && c.Title == in.loadedTitle {
+		in.refreshMotion()
 		return
 	}
 	in.loadedVisual = c.Visual
@@ -151,6 +174,7 @@ func (in *ClipInspector) loadSelection() {
 	set(in.crop, v.Crop, "fit")
 	in.rotation.SetSelected(strconv.Itoa(v.Rotation))
 	in.zoom.SetValue(v.CropZoom())
+	in.refreshMotion()
 }
 
 func (in *ClipInspector) apply() {
@@ -213,4 +237,123 @@ func (in *ClipInspector) apply() {
 	s.project.Clips[idx] = changed
 	s.changed("Applied visual settings · preview and export use the same effects")
 	s.seek(s.project.Start(idx) + math.Min(0.4, changed.Duration()/2))
+}
+
+// refreshMotion only reloads values when the playhead moves; dragging the
+// inspector sliders never mutates the project until Add/Update is pressed.
+func (in *ClipInspector) refreshMotion() {
+	if in.motionStatus == nil || in.motionBusy {
+		return
+	}
+	s := in.studio
+	if s.selectedAudio >= 0 || s.selected < 0 || s.selected >= len(s.project.Clips) {
+		in.motionStatus.SetText("Select a video clip")
+		return
+	}
+	clip := s.project.Clips[s.selected]
+	local := s.titleKeyframeTime(s.selected)
+	pose := clip.InitialTitleKeyframe(local)
+	in.motionBusy = true
+	in.motionScale.SetValue(pose.Scale)
+	in.motionOpacity.SetValue(pose.Opacity)
+	in.motionBusy = false
+	in.motionStatus.SetText(fmt.Sprintf("Clip %s / %s · %d keyframe(s) · position %.0f%%, %.0f%%", timecode(local), timecode(clip.Duration()), len(clip.TitleKeyframes), pose.X*100, pose.Y*100))
+}
+
+func (in *ClipInspector) putMotion() {
+	s := in.studio
+	i := s.selected
+	if s.selectedAudio >= 0 || i < 0 || i >= len(s.project.Clips) {
+		return
+	}
+	clip := &s.project.Clips[i]
+	if strings.TrimSpace(clip.Title) == "" {
+		s.info.SetText("Enter a title and Apply first, then add motion")
+		return
+	}
+	s.pause()
+	local := s.titleKeyframeTime(i)
+	pose := clip.InitialTitleKeyframe(local)
+	pose.Time = local
+	pose.Scale = math.Round(in.motionScale.Value*100) / 100
+	pose.Opacity = math.Round(in.motionOpacity.Value*100) / 100
+	s.remember()
+	if !clip.PutTitleKeyframe(pose) {
+		s.undo = s.undo[:len(s.undo)-1]
+		return
+	}
+	s.changed("Saved title keyframe at " + timecode(local))
+	s.seek(s.playhead)
+}
+
+func (in *ClipInspector) removeMotion() {
+	s := in.studio
+	i := s.selected
+	if i < 0 || i >= len(s.project.Clips) || s.selectedAudio >= 0 {
+		return
+	}
+	local := s.titleKeyframeTime(i)
+	clip := &s.project.Clips[i]
+	found := false
+	for _, key := range clip.TitleKeyframes {
+		if math.Abs(key.Time-local) <= 1.0/60 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.info.SetText("Move the playhead onto a keyframe to delete it")
+		return
+	}
+	s.pause()
+	s.remember()
+	clip.DeleteTitleKeyframe(local)
+	s.changed("Removed title keyframe")
+	s.seek(s.playhead)
+}
+
+func (in *ClipInspector) clearMotion() {
+	s := in.studio
+	i := s.selected
+	if i < 0 || i >= len(s.project.Clips) || s.selectedAudio >= 0 || len(s.project.Clips[i].TitleKeyframes) == 0 {
+		return
+	}
+	s.pause()
+	s.remember()
+	s.project.Clips[i].TitleKeyframes = nil
+	s.changed("Cleared title animation")
+	s.seek(s.playhead)
+}
+
+func (in *ClipInspector) jumpMotion(direction int) {
+	s := in.studio
+	i := s.selected
+	if i < 0 || i >= len(s.project.Clips) || s.selectedAudio >= 0 {
+		return
+	}
+	local := s.titleKeyframeTime(i)
+	keys := s.project.Clips[i].TitleKeyframes
+	var target float64
+	found := false
+	if direction > 0 {
+		for _, k := range keys {
+			if k.Time > local+1.0/60 {
+				target = k.Time
+				found = true
+				break
+			}
+		}
+	} else {
+		for j := len(keys) - 1; j >= 0; j-- {
+			if keys[j].Time < local-1.0/60 {
+				target = keys[j].Time
+				found = true
+				break
+			}
+		}
+	}
+	if found {
+		s.pause()
+		s.seek(s.project.Start(i) + target)
+	}
 }

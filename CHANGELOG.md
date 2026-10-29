@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 (beta) — 2026-10-29
+
+- Add title position, scale and opacity keyframes with linear interpolation.
+- Drag a selected title's guide in the preview to create one undoable position keyframe.
+- Add an Inspector Motion tab with keyframe add/update/remove/clear and previous/next navigation.
+- Show gold keyframe markers along the video timeline.
+- Preserve motion during clip split/trim and deep-copy keyframes for undo; older projects continue to open.
+- Use matching FFmpeg per-frame drawtext expressions for still previews, rendered playback and MP4 export.
+- Add interpolation, split/trim, JSON compatibility and real FFmpeg motion tests.
+
+
 ## 0.6.0 beta — 2026-10-29
 
 - Add docked Clip Inspector with Title, Colour, Effects tabs and atomic apply/undo.
