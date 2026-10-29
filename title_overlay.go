@@ -25,6 +25,8 @@ type TitleOverlay struct {
 	frame       *canvas.Rectangle
 	hint        *canvas.Text
 	pose        editor.TitleKeyframe
+	cameraPose  editor.VideoKeyframe
+	cameraDrag  bool
 	moving      bool
 	canDrag     bool
 	frameX      float32
@@ -78,17 +80,54 @@ func (o *TitleOverlay) videoRect() (x, y, width, height float32) {
 	return
 }
 
+// cameraEnabled selects camera-framing drags instead of title drags.
+// It is independent of the active inspector tab, making preview behaviour
+// explicit and predictable even when controls are scrolled off-screen.
+func (o *TitleOverlay) cameraEnabled() bool {
+	return o.studio.inspector != nil && o.studio.inspector.cameraDrag != nil && o.studio.inspector.cameraDrag.Checked
+}
+
 func (o *TitleOverlay) layoutGuide() {
 	if o.root == nil {
 		return
 	}
 	s := o.studio
-	if s.selectedAudio >= 0 || s.selected < 0 || s.selected >= len(s.project.Clips) || s.playing || s.project.Clips[s.selected].Title == "" {
+	if s.selectedAudio >= 0 || s.selected < 0 || s.selected >= len(s.project.Clips) || s.playing || (!o.cameraEnabled() && s.project.Clips[s.selected].Title == "") {
 		o.frame.Hide()
 		o.hint.Hide()
 		return
 	}
 	c := s.project.Clips[s.selected]
+	if o.cameraEnabled() {
+		if !o.moving {
+			pose := c.InitialVideoKeyframe(s.titleKeyframeTime(s.selected))
+			if s.inspector != nil && s.inspector.cameraZoom != nil {
+				pose.Zoom = s.inspector.cameraZoom.Value
+				pose.X = s.inspector.cameraX.Value
+				pose.Y = s.inspector.cameraY.Value
+			}
+			o.cameraPose = pose
+		}
+		vx, vy, vw, vh := o.videoRect()
+		zoom := math.Max(1, o.cameraPose.Zoom)
+		w, h := vw/float32(zoom), vh/float32(zoom)
+		o.frameWidth, o.frameHeight = w, h
+		o.frameX = vx + (vw-w)*float32(o.cameraPose.X)
+		o.frameY = vy + (vh-h)*float32(o.cameraPose.Y)
+		o.frame.Move(fyne.NewPos(o.frameX, o.frameY))
+		o.frame.Resize(fyne.NewSize(w, h))
+		o.hint.Text = "Drag camera frame"
+		if zoom <= 1.001 {
+			o.hint.Text = "Zoom above 1× to pan"
+		}
+		o.hint.Move(fyne.NewPos(o.frameX+5, o.frameY+5))
+		o.hint.Resize(o.hint.MinSize())
+		o.frame.Show()
+		o.hint.Show()
+		o.root.Refresh()
+		return
+	}
+	o.hint.Text = "↕ Drag title"
 	if !o.moving {
 		pose := c.InitialTitleKeyframe(s.titleKeyframeTime(s.selected))
 		o.pose = pose
@@ -117,7 +156,11 @@ func (o *TitleOverlay) MouseDown(e *desktop.MouseEvent) {
 		return
 	}
 	x, y := e.Position.X, e.Position.Y
+	o.cameraDrag = o.cameraEnabled()
 	o.canDrag = x >= o.frameX-5 && x <= o.frameX+o.frameWidth+5 && y >= o.frameY-20 && y <= o.frameY+o.frameHeight+5
+	if o.cameraDrag && o.cameraPose.Zoom <= 1.001 {
+		o.canDrag = false
+	}
 }
 func (o *TitleOverlay) MouseUp(*desktop.MouseEvent) {}
 
@@ -130,6 +173,15 @@ func (o *TitleOverlay) Dragged(e *fyne.DragEvent) {
 		o.moving = true
 	}
 	_, _, vw, vh := o.videoRect()
+	if o.cameraDrag {
+		zoom := math.Max(1.001, o.cameraPose.Zoom)
+		cropWidth := vw - vw/float32(zoom)
+		cropHeight := vh - vh/float32(zoom)
+		o.cameraPose.X = math.Max(0, math.Min(1, o.cameraPose.X+float64(e.Dragged.DX/cropWidth)))
+		o.cameraPose.Y = math.Max(0, math.Min(1, o.cameraPose.Y+float64(e.Dragged.DY/cropHeight)))
+		o.layoutGuide()
+		return
+	}
 	o.pose.X = math.Max(.02, math.Min(.98, o.pose.X+float64(e.Dragged.DX/vw)))
 	o.pose.Y = math.Max(.02, math.Min(.98, o.pose.Y+float64(e.Dragged.DY/vh)))
 	o.layoutGuide()
@@ -145,6 +197,19 @@ func (o *TitleOverlay) DragEnd() {
 	idx := s.selected
 	if idx < 0 || idx >= len(s.project.Clips) {
 		o.Refresh()
+		return
+	}
+	if o.cameraDrag {
+		o.cameraDrag = false
+		o.cameraPose.Time = s.titleKeyframeTime(idx)
+		s.remember()
+		if !s.project.Clips[idx].PutVideoKeyframe(o.cameraPose) {
+			s.undo = s.undo[:len(s.undo)-1]
+			o.Refresh()
+			return
+		}
+		s.changed("Camera framing keyframe saved at " + timecode(o.cameraPose.Time))
+		s.seek(s.playhead)
 		return
 	}
 	o.pose.Time = s.titleKeyframeTime(idx)

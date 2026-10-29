@@ -49,6 +49,17 @@ func visualFilters(clip editor.Clip, width, height, fps int, titleFile string, s
 		parts = append(parts, fmt.Sprintf("crop=w=iw/%s:h=ih/%s:x=(iw-ow)/2:y=(ih-oh)/2", seconds(zoom), seconds(zoom)))
 	}
 	parts = append(parts, fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1", width, height, width, height))
+	if len(clip.VideoKeyframes) > 0 {
+		// Stabilize the canvas first, then animate its crop. zoompan evaluates
+		// per incoming video frame. The input timestamps are reset at the
+		// beginning of this filter chain; `it` is clip-local seconds.
+		// Setting d=1 ensures one output frame per incoming frame rather
+		// than accidentally creating 25 frames per input frame.
+		zoom := videoKeyframeExpression(clip.VideoKeyframes, func(k editor.VideoKeyframe) float64 { return k.Zoom })
+		x := videoKeyframeExpression(clip.VideoKeyframes, func(k editor.VideoKeyframe) float64 { return k.X })
+		y := videoKeyframeExpression(clip.VideoKeyframes, func(k editor.VideoKeyframe) float64 { return k.Y })
+		parts = append(parts, fmt.Sprintf("zoompan=z='%s':x='(iw-iw/zoom)*(%s)':y='(ih-ih/zoom)*(%s)':d=1:s=%dx%d:fps=%d", zoom, x, y, width, height, fps))
+	}
 	if v.Brightness != 0 || v.Contrast != 0 || v.Saturation != 0 {
 		parts = append(parts, fmt.Sprintf("eq=brightness=%s:contrast=%s:saturation=%s", seconds(v.Brightness), seconds(1+v.Contrast), seconds(1+v.Saturation)))
 	}
@@ -145,6 +156,22 @@ func keyframeExpression(keys []editor.TitleKeyframe, value func(editor.TitleKeyf
 		span := b.Time - a.Time
 		interp := fmt.Sprintf("(%s+(%s-%s)*(t-%s)/%s)", seconds(value(a)), seconds(value(b)), seconds(value(a)), seconds(a.Time), seconds(span))
 		expr = fmt.Sprintf("if(lt(t\\,%s)\\,%s\\,if(lt(t\\,%s)\\,%s\\,%s))", seconds(a.Time), seconds(value(a)), seconds(b.Time), interp, expr)
+	}
+	return expr
+}
+
+// videoKeyframeExpression uses zoompan's input timestamp (`it`). Each
+// segment is linear, holding values before the first and after the last key.
+// Escaped commas prevent FFmpeg from splitting the nested expression.
+func videoKeyframeExpression(keys []editor.VideoKeyframe, value func(editor.VideoKeyframe) float64) string {
+	if len(keys) == 0 {
+		return "0"
+	}
+	expr := seconds(value(keys[len(keys)-1]))
+	for i := len(keys) - 2; i >= 0; i-- {
+		a, b := keys[i], keys[i+1]
+		interp := fmt.Sprintf("(%s+(%s-%s)*(it-%s)/%s)", seconds(value(a)), seconds(value(b)), seconds(value(a)), seconds(a.Time), seconds(b.Time-a.Time))
+		expr = fmt.Sprintf("if(lt(it\\,%s)\\,%s\\,if(lt(it\\,%s)\\,%s\\,%s))", seconds(a.Time), seconds(value(a)), seconds(b.Time), interp, expr)
 	}
 	return expr
 }

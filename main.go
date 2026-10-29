@@ -233,8 +233,9 @@ func (s *Studio) build() fyne.CanvasObject {
 		widget.NewLabel("Video: drag to split/trim/reorder · Audio: independent tracks, draggable edges, volume and fades · Purple: transitions"),
 		nil, nil, s.timelineScroll)
 	s.inspector = newClipInspector(s)
-	// Keep the inspector tabs from forcing the media library and preview off-screen.
-	// The dock can scroll horizontally in smaller windows instead.
+	// A tab’s minimum width (especially the Motion tab) must never force the
+	// video preview or media library off-screen when a clip is selected.
+	// The inspector scrolls horizontally if the window is too narrow instead.
 	inspectorViewport := container.NewHScroll(s.inspector.content)
 	previewAndInspector := container.NewHSplit(previewPanel, inspectorViewport)
 	previewAndInspector.Offset = 0.66
@@ -250,9 +251,10 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.saveProject),
 			widget.NewButtonWithIcon("Export MP4", theme.DownloadIcon(), s.exportMovie),
 		), widget.NewLabel("Non-destructive movie editor"))
-	// Status may contain long clip names: let it fill the remaining width
-	// with ellipsis instead of dictating the window minimum width.
-	statusBar := container.NewBorder(nil, nil, widget.NewLabel("VelvetCut 0.7.0 beta"), nil, s.info)
+	// The status text is dynamic and may contain long imported filenames.
+	// Border gives the truncated status label the remaining width rather than
+	// letting an HBox force the entire window to the text’s natural width.
+	statusBar := container.NewBorder(nil, nil, widget.NewLabel("VelvetCut 0.8.0 beta"), nil, s.info)
 	return container.NewBorder(header, statusBar, nil, nil, workspace)
 }
 
@@ -662,6 +664,7 @@ func (s *Studio) seek(t float64) {
 	s.timeline.Refresh()
 	if s.inspector != nil {
 		s.inspector.refreshMotion()
+		s.inspector.refreshCamera()
 	}
 	if s.titleOverlay != nil {
 		s.titleOverlay.Refresh()
@@ -719,7 +722,7 @@ func (s *Studio) requestPreview() {
 		defer cancel()
 		var img image.Image
 		var err error
-		if !proxyStill && (c.Visual.Active() || c.Title != "" || c.FadeIn > 0 || c.FadeOut > 0) {
+		if !proxyStill && (c.Visual.Active() || len(c.VideoKeyframes) > 0 || c.Title != "" || c.FadeIn > 0 || c.FadeOut > 0) {
 			img, err = media.StyledFrame(ctx, c, quantized)
 		} else {
 			img, err = media.Frame(ctx, c.Path, quantized)

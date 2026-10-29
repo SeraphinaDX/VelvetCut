@@ -169,6 +169,11 @@ func (t *Timeline) redraw() {
 		if clip.Title != "" && w > 60 {
 			addLabel(&objects, "T · title", color.NRGBA{R: 255, G: 234, B: 170, A: 255}, x+8, stripTop+25, 11)
 		}
+		// Cyan markers distinguish video camera motion from gold title keys.
+		for _, k := range clip.VideoKeyframes {
+			at := x + float32(k.Time*s.zoom)
+			addRect(&objects, color.NRGBA{R: 96, G: 239, B: 241, A: 255}, at-2, stripTop+32, 4, 9)
+		}
 		// Gold notches show each title keyframe at its clip-local time.
 		for _, k := range clip.TitleKeyframes {
 			at := x + float32(k.Time*s.zoom)
