@@ -164,8 +164,10 @@ func main() {
 
 func (s *Studio) build() fyne.CanvasObject {
 	s.info = widget.NewLabel("Ready · Import a video to begin")
+	s.info.Truncation = fyne.TextTruncateEllipsis
 	s.clock = widget.NewLabel("00:00.00 / 00:00.00")
 	s.selectedInfo = widget.NewLabel("Select a clip to inspect its source range")
+	s.selectedInfo.Truncation = fyne.TextTruncateEllipsis
 	s.preview = canvas.NewImageFromImage(image.NewRGBA(image.Rect(0, 0, 960, 540)))
 	s.preview.SetMinSize(fyne.NewSize(350, 215))
 	s.preview.FillMode = canvas.ImageFillContain
@@ -188,6 +190,7 @@ func (s *Studio) build() fyne.CanvasObject {
 
 	s.playButton = widget.NewButtonWithIcon("Play", theme.MediaPlayIcon(), s.togglePlayback)
 	s.previewNotes = widget.NewLabel("In-editor playback: 15 fps preview; mpv synchronizes audio")
+	s.previewNotes.Truncation = fyne.TextTruncateEllipsis
 	previewMode := widget.NewCheck("Play video in editor (beta)", func(on bool) {
 		s.stopPlayer()
 		s.embeddedPreview = on
@@ -230,7 +233,10 @@ func (s *Studio) build() fyne.CanvasObject {
 		widget.NewLabel("Video: drag to split/trim/reorder · Audio: independent tracks, draggable edges, volume and fades · Purple: transitions"),
 		nil, nil, s.timelineScroll)
 	s.inspector = newClipInspector(s)
-	previewAndInspector := container.NewHSplit(previewPanel, s.inspector.content)
+	// Keep the inspector tabs from forcing the media library and preview off-screen.
+	// The dock can scroll horizontally in smaller windows instead.
+	inspectorViewport := container.NewHScroll(s.inspector.content)
+	previewAndInspector := container.NewHSplit(previewPanel, inspectorViewport)
 	previewAndInspector.Offset = 0.66
 	topPanel := container.NewHSplit(mediaPanel, previewAndInspector)
 	topPanel.Offset = 0.27
@@ -244,7 +250,10 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.saveProject),
 			widget.NewButtonWithIcon("Export MP4", theme.DownloadIcon(), s.exportMovie),
 		), widget.NewLabel("Non-destructive movie editor"))
-	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.7.0 beta"), s.info), nil, nil, workspace)
+	// Status may contain long clip names: let it fill the remaining width
+	// with ellipsis instead of dictating the window minimum width.
+	statusBar := container.NewBorder(nil, nil, widget.NewLabel("VelvetCut 0.7.0 beta"), nil, s.info)
+	return container.NewBorder(header, statusBar, nil, nil, workspace)
 }
 
 func (s *Studio) id() string {
