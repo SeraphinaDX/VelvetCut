@@ -1,4 +1,11 @@
-# VelvetCut 0.6.0 beta
+# VelvetCut 0.7.0 beta
+
+## New in 0.7.0 — Keyframed animated titles
+
+Drag the **purple title outline** in the preview to set a position keyframe at the playhead. Use the **Motion** tab in the Clip Inspector to animate scale and opacity, navigate keyframes, and remove them. Gold marks appear on the video timeline. Keyframes are undoable, saved inside existing project files, and rendered consistently in the preview and final MP4.
+
+See [the 0.7.0 guide](docs/0.7.0.md) for a walkthrough and limitations.
+
 
 **VelvetCut** is a GPL-3.0-or-later video editor written in Go + Fyne, inspired by iMovie. FFmpeg handles media decoding and rendering; mpv supplies a synchronized playback clock.
 

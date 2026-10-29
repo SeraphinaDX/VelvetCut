@@ -83,6 +83,7 @@ type Studio struct {
 	previewVideoCancel      context.CancelFunc
 	previewNotes            *widget.Label
 	inspector               *ClipInspector
+	titleOverlay            *TitleOverlay
 	playbackProject         editor.Project
 	previewProxyPath        string
 	previewProxyDir         string
@@ -168,6 +169,7 @@ func (s *Studio) build() fyne.CanvasObject {
 	s.preview = canvas.NewImageFromImage(image.NewRGBA(image.Rect(0, 0, 960, 540)))
 	s.preview.SetMinSize(fyne.NewSize(350, 215))
 	s.preview.FillMode = canvas.ImageFillContain
+	s.titleOverlay = newTitleOverlay(s)
 	s.timeline = NewTimeline(s)
 	s.timelineScroll = container.NewHScroll(s.timeline)
 	s.timelineScroll.SetMinSize(fyne.NewSize(400, timelineHeight))
@@ -204,7 +206,7 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("End", theme.MediaSkipNextIcon(), func() { s.pause(); s.seek(s.project.Duration()) }),
 			s.clock,
 		)), s.selectedInfo), nil, nil,
-		container.NewMax(canvas.NewRectangle(color.NRGBA{R: 11, G: 12, B: 21, A: 255}), s.preview))
+		container.NewMax(canvas.NewRectangle(color.NRGBA{R: 11, G: 12, B: 21, A: 255}), s.preview, s.titleOverlay))
 
 	editingToolbar := container.NewHBox(
 		widget.NewButtonWithIcon("Split at playhead", theme.ContentCutIcon(), s.split),
@@ -242,7 +244,7 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.saveProject),
 			widget.NewButtonWithIcon("Export MP4", theme.DownloadIcon(), s.exportMovie),
 		), widget.NewLabel("Non-destructive movie editor"))
-	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.6.0 beta"), s.info), nil, nil, workspace)
+	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.7.0 beta"), s.info), nil, nil, workspace)
 }
 
 func (s *Studio) id() string {
@@ -638,6 +640,9 @@ func (s *Studio) changed(status string) {
 	if s.inspector != nil {
 		s.inspector.loadSelection()
 	}
+	if s.titleOverlay != nil {
+		s.titleOverlay.Refresh()
+	}
 	s.timeline.Refresh()
 	s.timelineScroll.Refresh()
 	s.requestPreview()
@@ -646,6 +651,12 @@ func (s *Studio) seek(t float64) {
 	s.playhead = math.Max(0, math.Min(t, s.project.Duration()))
 	s.clock.SetText(timecode(s.playhead) + " / " + timecode(s.project.Duration()))
 	s.timeline.Refresh()
+	if s.inspector != nil {
+		s.inspector.refreshMotion()
+	}
+	if s.titleOverlay != nil {
+		s.titleOverlay.Refresh()
+	}
 	if s.player != nil && !s.playing {
 		player := s.player
 		at := s.playhead
@@ -1180,4 +1191,14 @@ func (s *Studio) exportMovie() {
 	}, s.window)
 	d.SetFileName("VelvetCut-movie.mp4")
 	d.Show()
+}
+
+// titleKeyframeTime returns a clip-local time. Title motion never stores a
+// source timestamp or absolute movie time, so splits and trims are predictable.
+func (s *Studio) titleKeyframeTime(index int) float64 {
+	if index < 0 || index >= len(s.project.Clips) {
+		return 0
+	}
+	clip := s.project.Clips[index]
+	return math.Max(0, math.Min(clip.Duration(), s.playhead-s.project.Start(index)))
 }

@@ -169,6 +169,11 @@ func (t *Timeline) redraw() {
 		if clip.Title != "" && w > 60 {
 			addLabel(&objects, "T · title", color.NRGBA{R: 255, G: 234, B: 170, A: 255}, x+8, stripTop+25, 11)
 		}
+		// Gold notches show each title keyframe at its clip-local time.
+		for _, k := range clip.TitleKeyframes {
+			at := x + float32(k.Time*s.zoom)
+			addRect(&objects, color.NRGBA{R: 255, G: 216, B: 100, A: 255}, at-2, stripTop+22, 4, 9)
+		}
 		if w > 100 {
 			addLabel(&objects, timecode(clip.Duration()), color.White, x+8, stripTop+stripHeight-19, 11)
 		}
