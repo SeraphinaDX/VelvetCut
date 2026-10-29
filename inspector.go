@@ -55,9 +55,17 @@ func labeledSlider(label string, slider *widget.Slider, format string) fyne.Canv
 	return container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel(label), value), slider)
 }
 
+// Wrap inspector hints instead of expanding the dock to their full line width.
+func inspectorHelp(text string) *widget.Label {
+	l := widget.NewLabel(text)
+	l.Wrapping = fyne.TextWrapWord
+	return l
+}
+
 func newClipInspector(studio *Studio) *ClipInspector {
 	in := &ClipInspector{studio: studio}
 	in.header = widget.NewLabel("Select a video clip")
+	in.header.Truncation = fyne.TextTruncateEllipsis
 	in.title = widget.NewEntry()
 	in.title.SetPlaceHolder("Title on the video")
 	in.font = inspectorSelect([]string{"Sans", "Serif", "Mono"})
@@ -81,7 +89,7 @@ func newClipInspector(studio *Studio) *ClipInspector {
 			widget.NewFormItem("Position", in.position), widget.NewFormItem("Animation", in.animation)),
 		labeledSlider("Font size", in.titleSize, "%.0f px"),
 		labeledSlider("Title duration", in.titleSeconds, "%.1f s"),
-		widget.NewLabel("Title changes appear in the paused preview and the rendered movie."),
+		inspectorHelp("Title changes appear in the paused preview and the rendered movie."),
 	))
 	colour := container.NewVScroll(container.NewVBox(
 		labeledSlider("Brightness", in.brightness, "%+.2f"),
@@ -92,25 +100,26 @@ func newClipInspector(studio *Studio) *ClipInspector {
 	effects := container.NewVScroll(container.NewVBox(
 		widget.NewForm(widget.NewFormItem("Effect", in.effect), widget.NewFormItem("Crop", in.crop), widget.NewFormItem("Rotate clockwise", in.rotation)),
 		labeledSlider("Center crop zoom", in.zoom, "%.2f ×"),
-		widget.NewLabel("Fit preserves the full image. Fill crops to the movie's aspect ratio. Square and 4:3 crop the source, then letterbox it."),
+		inspectorHelp("Fit preserves the full image. Fill crops to the movie's aspect ratio. Square and 4:3 crop the source, then letterbox it."),
 	))
 	in.motionScale = inspectorSlider(0.25, 4, 0.05)
 	in.motionOpacity = inspectorSlider(0, 1, 0.05)
 	in.motionStatus = widget.NewLabel("Select a titled video clip to animate")
 	in.motionStatus.Wrapping = fyne.TextWrapWord
 	motion := container.NewVScroll(container.NewVBox(
-		widget.NewLabel("Drag the title guide in the preview to create a position keyframe."),
-		widget.NewLabel("At the playhead, set scale and opacity; click Add / update keyframe."),
+		inspectorHelp("Drag the title guide in the preview to create a position keyframe."),
+		inspectorHelp("At the playhead, set scale and opacity; click Add / update keyframe."),
 		in.motionStatus,
 		labeledSlider("Title size multiplier", in.motionScale, "%.2f ×"),
 		labeledSlider("Title opacity", in.motionOpacity, "%.0f%%"),
 		widget.NewButton("Add / update keyframe", in.putMotion),
-		container.NewGridWithColumns(2,
+		// The buttons need to fit in a narrow docked inspector.
+		container.NewGridWithColumns(1,
 			widget.NewButton("Previous keyframe", func() { in.jumpMotion(-1) }),
 			widget.NewButton("Next keyframe", func() { in.jumpMotion(1) }),
 			widget.NewButton("Remove at playhead", in.removeMotion),
 			widget.NewButton("Clear all keyframes", in.clearMotion)),
-		widget.NewLabel("Keyframes use clip-local time and interpolate linearly. They override legacy title entrance animations."),
+		inspectorHelp("Keyframes use clip-local time and interpolate linearly. They override legacy title entrance animations."),
 	))
 	tabs := container.NewAppTabs(container.NewTabItem("Title", titles), container.NewTabItem("Colour", colour), container.NewTabItem("Effects", effects), container.NewTabItem("Motion", motion))
 	tabs.SetTabLocation(container.TabLocationTop)
