@@ -33,6 +33,10 @@ type ClipInspector struct {
 	motionScale, motionOpacity                    *widget.Slider
 	motionStatus                                  *widget.Label
 	motionBusy                                    bool
+	cameraZoom, cameraX, cameraY                  *widget.Slider
+	cameraStatus                                  *widget.Label
+	cameraDrag                                    *widget.Check
+	cameraBusy                                    bool
 }
 
 func inspectorSelect(options []string) *widget.Select {
@@ -55,7 +59,8 @@ func labeledSlider(label string, slider *widget.Slider, format string) fyne.Canv
 	return container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel(label), value), slider)
 }
 
-// Wrap inspector hints instead of expanding the dock to their full line width.
+// Inspector help text must wrap within the allotted column, rather than
+// advertising its full line length as the inspector's minimum width.
 func inspectorHelp(text string) *widget.Label {
 	l := widget.NewLabel(text)
 	l.Wrapping = fyne.TextWrapWord
@@ -113,7 +118,7 @@ func newClipInspector(studio *Studio) *ClipInspector {
 		labeledSlider("Title size multiplier", in.motionScale, "%.2f ×"),
 		labeledSlider("Title opacity", in.motionOpacity, "%.0f%%"),
 		widget.NewButton("Add / update keyframe", in.putMotion),
-		// The buttons need to fit in a narrow docked inspector.
+		// One column stays readable in the narrow docked inspector.
 		container.NewGridWithColumns(1,
 			widget.NewButton("Previous keyframe", func() { in.jumpMotion(-1) }),
 			widget.NewButton("Next keyframe", func() { in.jumpMotion(1) }),
@@ -121,7 +126,46 @@ func newClipInspector(studio *Studio) *ClipInspector {
 			widget.NewButton("Clear all keyframes", in.clearMotion)),
 		inspectorHelp("Keyframes use clip-local time and interpolate linearly. They override legacy title entrance animations."),
 	))
-	tabs := container.NewAppTabs(container.NewTabItem("Title", titles), container.NewTabItem("Colour", colour), container.NewTabItem("Effects", effects), container.NewTabItem("Motion", motion))
+	// Camera keyframes animate the video image itself, independently of the
+	// text-only Motion tab. Controls stay in one narrow, scrollable column.
+	in.cameraZoom = inspectorSlider(1, 4, 0.05)
+	in.cameraX = inspectorSlider(0, 1, 0.01)
+	in.cameraY = inspectorSlider(0, 1, 0.01)
+	in.cameraStatus = widget.NewLabel("Select a clip to animate its framing")
+	in.cameraStatus.Wrapping = fyne.TextWrapWord
+	in.cameraDrag = widget.NewCheck("Drag camera framing in preview", func(bool) {
+		studio.titleOverlay.Refresh()
+	})
+	camera := container.NewVScroll(container.NewVBox(
+		inspectorHelp("Ken Burns motion: zoom into the video and move the focus between keyframes."),
+		in.cameraStatus,
+		labeledSlider("Video zoom", in.cameraZoom, "%.2f ×"),
+		labeledSlider("Focus left → right (0–1)", in.cameraX, "%.2f"),
+		labeledSlider("Focus top → bottom (0–1)", in.cameraY, "%.2f"),
+		in.cameraDrag,
+		inspectorHelp("Set Zoom above 1× to drag the purple framing rectangle. A drag commits a keyframe at the playhead."),
+		widget.NewButton("Add / update camera keyframe", in.putCamera),
+		container.NewGridWithColumns(1,
+			widget.NewButton("Previous camera keyframe", func() { in.jumpCamera(-1) }),
+			widget.NewButton("Next camera keyframe", func() { in.jumpCamera(1) }),
+			widget.NewButton("Remove at playhead", in.removeCamera),
+			widget.NewButton("Clear camera animation", in.clearCamera)),
+		inspectorHelp("Move the playhead and set another keyframe to animate. Older projects remain unchanged."),
+	))
+	// Keep the framing guide updated when a slider is adjusted, without
+	// rebuilding the FFmpeg preview proxy until a keyframe is committed.
+	for _, slider := range []*widget.Slider{in.cameraZoom, in.cameraX, in.cameraY} {
+		old := slider.OnChanged
+		slider.OnChanged = func(v float64) {
+			if old != nil {
+				old(v)
+			}
+			if studio.titleOverlay != nil {
+				studio.titleOverlay.Refresh()
+			}
+		}
+	}
+	tabs := container.NewAppTabs(container.NewTabItem("Title", titles), container.NewTabItem("Colour", colour), container.NewTabItem("Effects", effects), container.NewTabItem("Motion", motion), container.NewTabItem("Camera", camera))
 	tabs.SetTabLocation(container.TabLocationTop)
 	in.applyButton = widget.NewButton("Apply to selected clip", in.apply)
 	previewButton := widget.NewButton("Show clip", func() {
@@ -144,11 +188,13 @@ func (in *ClipInspector) loadSelection() {
 		in.header.SetText("Select a video clip")
 		in.applyButton.Disable()
 		in.refreshMotion()
+		in.refreshCamera()
 		return
 	}
 	c := s.project.Clips[s.selected]
 	if c.ID == in.selectedID && c.Visual == in.loadedVisual && c.Title == in.loadedTitle {
 		in.refreshMotion()
+		in.refreshCamera()
 		return
 	}
 	in.loadedVisual = c.Visual
@@ -184,6 +230,7 @@ func (in *ClipInspector) loadSelection() {
 	in.rotation.SetSelected(strconv.Itoa(v.Rotation))
 	in.zoom.SetValue(v.CropZoom())
 	in.refreshMotion()
+	in.refreshCamera()
 }
 
 func (in *ClipInspector) apply() {
@@ -342,6 +389,125 @@ func (in *ClipInspector) jumpMotion(direction int) {
 	}
 	local := s.titleKeyframeTime(i)
 	keys := s.project.Clips[i].TitleKeyframes
+	var target float64
+	found := false
+	if direction > 0 {
+		for _, k := range keys {
+			if k.Time > local+1.0/60 {
+				target = k.Time
+				found = true
+				break
+			}
+		}
+	} else {
+		for j := len(keys) - 1; j >= 0; j-- {
+			if keys[j].Time < local-1.0/60 {
+				target = keys[j].Time
+				found = true
+				break
+			}
+		}
+	}
+	if found {
+		s.pause()
+		s.seek(s.project.Start(i) + target)
+	}
+}
+
+// refreshCamera tracks the playhead without changing staged values during
+// camera-slider updates; only the Add/Update action edits the project.
+func (in *ClipInspector) refreshCamera() {
+	if in.cameraStatus == nil || in.cameraBusy {
+		return
+	}
+	s := in.studio
+	if s.selectedAudio >= 0 || s.selected < 0 || s.selected >= len(s.project.Clips) {
+		in.cameraStatus.SetText("Select a video clip")
+		return
+	}
+	clip := s.project.Clips[s.selected]
+	local := s.titleKeyframeTime(s.selected)
+	pose := clip.InitialVideoKeyframe(local)
+	in.cameraBusy = true
+	in.cameraZoom.SetValue(pose.Zoom)
+	in.cameraX.SetValue(pose.X)
+	in.cameraY.SetValue(pose.Y)
+	in.cameraBusy = false
+	in.cameraStatus.SetText(fmt.Sprintf("Clip %s / %s · %d camera keyframes", timecode(local), timecode(clip.Duration()), len(clip.VideoKeyframes)))
+}
+
+func (in *ClipInspector) putCamera() {
+	s := in.studio
+	i := s.selected
+	if s.selectedAudio >= 0 || i < 0 || i >= len(s.project.Clips) {
+		return
+	}
+	local := s.titleKeyframeTime(i)
+	pose := editor.VideoKeyframe{Time: local,
+		X:    math.Round(in.cameraX.Value*100) / 100,
+		Y:    math.Round(in.cameraY.Value*100) / 100,
+		Zoom: math.Round(in.cameraZoom.Value*100) / 100,
+	}
+	if !pose.Valid() {
+		return
+	}
+	s.pause()
+	s.remember()
+	if !s.project.Clips[i].PutVideoKeyframe(pose) {
+		s.undo = s.undo[:len(s.undo)-1]
+		return
+	}
+	s.changed("Video camera keyframe saved at " + timecode(local))
+	s.seek(s.playhead)
+}
+
+func (in *ClipInspector) removeCamera() {
+	s := in.studio
+	i := s.selected
+	if i < 0 || i >= len(s.project.Clips) || s.selectedAudio >= 0 {
+		return
+	}
+	local := s.titleKeyframeTime(i)
+	clip := &s.project.Clips[i]
+	found := false
+	for _, k := range clip.VideoKeyframes {
+		if math.Abs(k.Time-local) <= 1.0/60 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.info.SetText("Move the playhead onto a camera keyframe to remove it")
+		return
+	}
+	s.pause()
+	s.remember()
+	clip.DeleteVideoKeyframe(local)
+	s.changed("Removed camera keyframe")
+	s.seek(s.playhead)
+}
+
+func (in *ClipInspector) clearCamera() {
+	s := in.studio
+	i := s.selected
+	if i < 0 || i >= len(s.project.Clips) || s.selectedAudio >= 0 || len(s.project.Clips[i].VideoKeyframes) == 0 {
+		return
+	}
+	s.pause()
+	s.remember()
+	s.project.Clips[i].VideoKeyframes = nil
+	s.changed("Cleared video camera animation")
+	s.seek(s.playhead)
+}
+
+func (in *ClipInspector) jumpCamera(direction int) {
+	s := in.studio
+	i := s.selected
+	if i < 0 || i >= len(s.project.Clips) || s.selectedAudio >= 0 {
+		return
+	}
+	local := s.titleKeyframeTime(i)
+	keys := s.project.Clips[i].VideoKeyframes
 	var target float64
 	found := false
 	if direction > 0 {
