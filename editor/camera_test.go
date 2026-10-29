@@ -94,3 +94,19 @@ func TestVideoMotionInvalidData(t *testing.T) {
 		t.Fatal("accepted unsorted video keyframes")
 	}
 }
+
+// Camera-only edits also require a composited playback proxy; otherwise
+// mpv could play the original unanimated video while preview/export are right.
+func TestCameraMotionTriggersRenderedPreview(t *testing.T) {
+	p := NewProject()
+	c := cameraClip()
+	p.Clips = []Clip{c}
+	if p.NeedsRenderedPreview() {
+		t.Fatal("plain clip unexpectedly needs proxy")
+	}
+	c.PutVideoKeyframe(VideoKeyframe{Time: 0, X: .5, Y: .5, Zoom: 2})
+	p.Clips[0] = c
+	if !p.NeedsRenderedPreview() {
+		t.Fatal("camera keyframes need composited preview")
+	}
+}
