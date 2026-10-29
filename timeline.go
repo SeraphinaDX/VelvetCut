@@ -163,6 +163,9 @@ func (t *Timeline) redraw() {
 			}
 			addLabel(&objects, name, color.White, x+8, stripTop+5, 12)
 		}
+		if clip.Visual.Active() && w > 70 {
+			addLabel(&objects, "FX", color.NRGBA{R: 245, G: 198, B: 124, A: 255}, x+w-26, stripTop+25, 11)
+		}
 		if clip.Title != "" && w > 60 {
 			addLabel(&objects, "T · title", color.NRGBA{R: 255, G: 234, B: 170, A: 255}, x+8, stripTop+25, 11)
 		}

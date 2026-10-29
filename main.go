@@ -82,6 +82,7 @@ type Studio struct {
 	previewVideoNext        *media.PreviewFrame
 	previewVideoCancel      context.CancelFunc
 	previewNotes            *widget.Label
+	inspector               *ClipInspector
 	playbackProject         editor.Project
 	previewProxyPath        string
 	previewProxyDir         string
@@ -226,7 +227,10 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButton("Add music / SFX", s.importAudio), widget.NewButton("Detach audio", s.detachAudio), widget.NewButton("Volume / fades", s.editAudio), widget.NewLabel("Click an audio clip to select · Drag body to move · Drag edges to trim"))),
 		widget.NewLabel("Video: drag to split/trim/reorder · Audio: independent tracks, draggable edges, volume and fades · Purple: transitions"),
 		nil, nil, s.timelineScroll)
-	topPanel := container.NewHSplit(mediaPanel, previewPanel)
+	s.inspector = newClipInspector(s)
+	previewAndInspector := container.NewHSplit(previewPanel, s.inspector.content)
+	previewAndInspector.Offset = 0.66
+	topPanel := container.NewHSplit(mediaPanel, previewAndInspector)
 	topPanel.Offset = 0.27
 	workspace := container.NewVSplit(topPanel, timelinePanel)
 	workspace.Offset = 0.48
@@ -238,7 +242,7 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.saveProject),
 			widget.NewButtonWithIcon("Export MP4", theme.DownloadIcon(), s.exportMovie),
 		), widget.NewLabel("Non-destructive movie editor"))
-	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.5.0 beta"), s.info), nil, nil, workspace)
+	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.6.0 beta"), s.info), nil, nil, workspace)
 }
 
 func (s *Studio) id() string {
@@ -631,6 +635,9 @@ func (s *Studio) changed(status string) {
 	} else {
 		s.selectedInfo.SetText("No clip selected")
 	}
+	if s.inspector != nil {
+		s.inspector.loadSelection()
+	}
 	s.timeline.Refresh()
 	s.timelineScroll.Refresh()
 	s.requestPreview()
@@ -663,13 +670,15 @@ func (s *Studio) requestPreview() {
 		return
 	}
 	c := s.project.Clips[i]
+	proxyStill := false
 	if s.project.NeedsRenderedPreview() && s.previewProxyPath != "" && s.previewProxyKey == projectKey(s.project) {
 		c = editor.Clip{Path: s.previewProxyPath, SourceStart: 0, SourceEnd: s.project.Duration()}
 		src = s.playhead
+		proxyStill = true
 	}
 	// Still-image scrubbing samples at 4 FPS; actual playback uses mpv.
 	quantized := math.Floor(src*4) / 4
-	key := fmt.Sprintf("%s/%.2f", c.Path, quantized)
+	key := fmt.Sprintf("%s/%.2f/%x", c.Path, quantized, projectKey(s.project))
 	if key == s.lastFrameKey {
 		return
 	}
@@ -688,7 +697,13 @@ func (s *Studio) requestPreview() {
 	s.previewCancel = cancel
 	go func() {
 		defer cancel()
-		img, err := media.Frame(ctx, c.Path, quantized)
+		var img image.Image
+		var err error
+		if !proxyStill && (c.Visual.Active() || c.Title != "" || c.FadeIn > 0 || c.FadeOut > 0) {
+			img, err = media.StyledFrame(ctx, c, quantized)
+		} else {
+			img, err = media.Frame(ctx, c.Path, quantized)
+		}
 		if err != nil {
 			return
 		}

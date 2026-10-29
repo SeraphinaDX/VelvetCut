@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 beta — 2026-10-29
+
+- Add docked Clip Inspector with Title, Colour, Effects tabs and atomic apply/undo.
+- Support animated fade, slide, zoom text; presets for title font, color, location, size and duration.
+- Add brightness, contrast, saturation, temperature, BW/sepia/vignette, center crop (fit/fill/square/4:3), 90° rotations and crop zoom.
+- Use a shared FFmpeg filter graph for styled paused frames, composited preview and full MP4 export.
+- Render proxy previews for titles, fades, effects and existing multitrack audio; old projects retain zero-value defaults.
+- Add media rendering regression tests for title animations, video effects, transforms and soundtrack preservation.
+
+
 ## 0.5.0 (beta) — 2026-10-29
 
 - Add three independent, individually movable/trimmed audio lanes with waveform previews.

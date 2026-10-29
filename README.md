@@ -1,61 +1,49 @@
-# VelvetCut 0.5.0 (beta)
+# VelvetCut 0.6.0 beta
 
-**VelvetCut** is a GPL-3.0-or-later, non-destructive iMovie-inspired video editor written in Go and [Fyne](https://fyne.io/). It uses FFmpeg/FFprobe to decode/export clips and mpv to keep live playback synchronized.
+**VelvetCut** is a GPL-3.0-or-later video editor written in Go + Fyne, inspired by iMovie. FFmpeg handles media decoding and rendering; mpv supplies a synchronized playback clock.
 
-## Audio editing in 0.5.0
+## 0.6.0: Clip inspector, titles, and visual effects
 
-- **Three independent audio lanes** under the video timeline. Add music, voiceover recordings, or sound effects via **Add music / SFX** (MP3, WAV, M4A, AAC, FLAC, Ogg, Opus, AIFF) or drop an audio file into the window.
-- **Drag audio clips** to a new start time, or drag either edge to trim. Audio edits do not ripple video or affect other audio clips. Audio clips may overlap; different lanes help keep them visible.
-- **Select audio**, click **Volume / fades** to set 0–200% volume, mute, fade in/out duration in seconds, or choose Audio 1/2/3. Video clips also have their own volume/mute controls in this dialog.
-- **Detach audio** from a selected video clip. Original video sound is muted and a separately editable sound clip is added at the original timeline position. Video footage is unchanged.
-- Final MP4 output **mixes all audio lanes** with the video's original soundtrack. Fades, volume and mute also appear in the **in-editor rendered preview**. The preview proxy is regenerated after audio or transition edits.
-- Projects save audio sources as references, not copies; existing `.velvetcut` projects open unchanged. Original video/audio files are never overwritten.
+Select a **video** clip to open its docked **Clip Inspector** on the right. Three tabs provide non-destructive settings:
 
-## Existing video features
+- **Title:** edit text, choose Sans/Serif/Mono, white/yellow/cyan/pink/black, title location, and a fade, slide, or zoom animation. Set font size and title duration.
+- **Colour:** brightness, contrast, saturation, and warm/cool temperature sliders.
+- **Effects:** none, black-and-white, sepia, or vignette; Fit, Fill, Square, or 4:3 center cropping; 0°/90°/180°/270° clockwise rotation; center-crop zoom.
 
-- Import video (MP4/MOV/MKV/WebM/AVI/M4V), insert at playhead, split, reorder, trim either edge, drag/drop files.
-- Accurate FFmpeg-based cross-dissolves and fade-through-black with audio crossfades.
-- Clip titles, fades to/from black, video thumbnail/waveform timeline, snapping and keyboard shortcuts.
-- Undo/redo, save/open JSON `.velvetcut` projects; export H.264/AAC MP4 (1280×720 at 30 fps).
-- In-app video playback via FFmpeg frame streaming (15 fps / 640×360) and mpv audio. The separate mpv playback window remains available as a fallback.
+Press **Apply to selected clip** to store the edit as **one undoable operation**. Paused-frame scrubbing refreshes with the same visual filters that final MP4 export uses. Click **Play** for an **effects-accurate** in-editor video preview; VelvetCut first renders a lower-resolution proxy (cached until the project changes), so large projects may take longer to start. The proxy preview and final MP4 use the same FFmpeg visual filters, at different resolutions and frame rates. Existing transitions and independent audio tracks are preserved.
 
-## Build and run (CachyOS / Arch Linux)
+**Note:** The inspector controls are staged until you press Apply, rather than rebuilding a full video proxy on every slider movement. Titles are overlays on existing clips, not separate movable title tracks. Cropping is centered rather than free-form mouse cropping. Color temperature is a red/blue balance approximation.
+
+## Existing features
+
+- Media library with timeline dragging and desktop file drops.
+- Video clip insertion, splitting, trimming, reordering, zoom, snapping, shortcuts, undo/redo.
+- Cross-dissolves, fade-through-black transitions with audio crossfade and draggable durations.
+- Three independent audio lanes: music/sound effects, volume, fades, trimming, repositioning and detached clip soundtracks.
+- H.264/AAC MP4 export with synchronized mpv + FFmpeg in-editor preview. Fallback external mpv playback.
+- Non-destructive `.velvetcut` JSON projects; 0.1.x–0.5.x project files remain compatible.
+
+## Install and run (CachyOS / Arch)
 
 ```sh
 sudo pacman -S --needed go ffmpeg mpv base-devel mesa libglvnd libx11 libxcursor libxrandr libxinerama libxi
-
 go mod tidy
 go run .
 ```
 
-Go 1.22+ and Fyne v2.8.1 are required. Test the editing/media logic independently:
+Run model and real FFmpeg rendering tests:
 
 ```sh
 go test ./editor ./media
 ```
 
-## Usage example
+The new tests render the animated title presets, cropping and rotations, all effects, audio-bearing MP4s, and paused styled frames. Desktop Fyne UI testing still needs a Linux machine with working OpenGL dependencies.
 
-1. Import and insert two video clips, then apply a cross-dissolve if desired.
-2. Move the playhead to 00:03, click **Add music / SFX** and select a song.
-3. Drag its block on AUDIO 1 to align the music with the video, or drag its edge to shorten it.
-4. Select it, open **Volume / fades**, set **Volume** to 35%, **Fade in** to 1, **Fade out** to 2. Move it to AUDIO 2 if you want room for voiceover on AUDIO 1.
-5. Click a video clip and choose **Detach audio** to edit its soundtrack independently.
-6. Press Play; VelvetCut renders a temporary proxy containing music and transitions, then plays it inside the editor. Export MP4 to create the movie.
+## Limitations
 
-## Known limitations
+- The in-editor playback path displays a 640×360 / 15 fps preview. FFmpeg proxies are slower to produce for longer timelines, but cached until edits occur.
+- Output defaults to 1280×720 at 30 fps. Crop aspect modes letterbox into this canvas.
+- Saved projects still reference absolute media paths. Moving media can break links.
+- No keyframe animation editor, freehand crop, or standalone title tracks yet.
 
-- Edited audio or transitions require a temporary FFmpeg proxy render before preview playback; it is cached until an edit changes the project.
-- Video thumbnails still scrub at 4 fps; animated in-editor playback targets 15 fps. Effects playback is a preview proxy, not real-time GPU compositing.
-- Audio clips beyond the video end are trimmed during export; clips can overlap, and total mixed loudness can clip if raised too high (use lower gains to avoid distortion).
-- Three fixed visual audio lanes are provided; drag moves clips horizontally, and **Volume / fades** changes lanes. Auto-ducking, recording, stereo panning and per-track mixer controls are not implemented yet.
-- Source paths are absolute and require files to remain at their original locations. Windows/macOS playback is not tested.
-- Fyne desktop preview requires hands-on testing on Linux; the package-level FFmpeg tests do not launch the window.
-
-## Source
-
-- `editor/project.go`, `editor/audio.go`, `editor/transition.go`: edit model and timeline timing.
-- `audio_ui.go`, `main.go`, `timeline.go`: audio tools, controls and Fyne timeline.
-- `media/audio.go`, `media/ffmpeg.go`: audio metadata, export/mix/proxy.
-
-License: **GPL-3.0-or-later**. See `COPYING`.
+Licensed GPL-3.0-or-later; see `COPYING`.

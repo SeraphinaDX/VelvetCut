@@ -1,0 +1,216 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/widget"
+
+	"github.com/SeraphinaDX/VelvetCut/editor"
+)
+
+// ClipInspector is an iMovie-style, docked panel. Controls are deliberately
+// staged until Apply: every adjustment is one undo step and one proxy rebuild.
+// Preview stills then reflect the same FFmpeg graph used for final export.
+type ClipInspector struct {
+	studio                                        *Studio
+	content                                       fyne.CanvasObject
+	selectedID                                    string
+	loadedVisual                                  editor.VisualSettings
+	loadedTitle                                   string
+	header                                        *widget.Label
+	applyButton                                   *widget.Button
+	title                                         *widget.Entry
+	font, color, position, animation              *widget.Select
+	titleSize, titleSeconds                       *widget.Slider
+	brightness, contrast, saturation, temperature *widget.Slider
+	effect, crop, rotation                        *widget.Select
+	zoom                                          *widget.Slider
+}
+
+func inspectorSelect(options []string) *widget.Select {
+	s := widget.NewSelect(options, nil)
+	if len(options) > 0 {
+		s.SetSelected(options[0])
+	}
+	return s
+}
+
+func inspectorSlider(min, max, step float64) *widget.Slider {
+	s := widget.NewSlider(min, max)
+	s.Step = step
+	return s
+}
+
+func labeledSlider(label string, slider *widget.Slider, format string) fyne.CanvasObject {
+	value := widget.NewLabel(fmt.Sprintf(format, slider.Value))
+	slider.OnChanged = func(v float64) { value.SetText(fmt.Sprintf(format, v)) }
+	return container.NewVBox(container.NewBorder(nil, nil, widget.NewLabel(label), value), slider)
+}
+
+func newClipInspector(studio *Studio) *ClipInspector {
+	in := &ClipInspector{studio: studio}
+	in.header = widget.NewLabel("Select a video clip")
+	in.title = widget.NewEntry()
+	in.title.SetPlaceHolder("Title on the video")
+	in.font = inspectorSelect([]string{"Sans", "Serif", "Mono"})
+	in.color = inspectorSelect([]string{"white", "yellow", "cyan", "pink", "black"})
+	in.position = inspectorSelect([]string{"bottom", "top", "center", "lower-left"})
+	in.animation = inspectorSelect([]string{"none", "fade", "slide", "zoom"})
+	in.titleSize = inspectorSlider(24, 120, 2)
+	in.titleSeconds = inspectorSlider(0.5, 8, 0.5)
+	in.brightness = inspectorSlider(-0.5, 0.5, 0.05)
+	in.contrast = inspectorSlider(-0.5, 1, 0.05)
+	in.saturation = inspectorSlider(-1, 2, 0.05)
+	in.temperature = inspectorSlider(-1, 1, 0.05)
+	in.effect = inspectorSelect([]string{"none", "bw", "sepia", "vignette"})
+	in.crop = inspectorSelect([]string{"fit", "fill", "square", "4:3"})
+	in.rotation = inspectorSelect([]string{"0", "90", "180", "270"})
+	in.zoom = inspectorSlider(1, 2.5, 0.05)
+	titles := container.NewVScroll(container.NewVBox(
+		widget.NewLabel("On-screen title"), in.title,
+		widget.NewForm(
+			widget.NewFormItem("Font", in.font), widget.NewFormItem("Colour", in.color),
+			widget.NewFormItem("Position", in.position), widget.NewFormItem("Animation", in.animation)),
+		labeledSlider("Font size", in.titleSize, "%.0f px"),
+		labeledSlider("Title duration", in.titleSeconds, "%.1f s"),
+		widget.NewLabel("Title changes appear in the paused preview and the rendered movie."),
+	))
+	colour := container.NewVScroll(container.NewVBox(
+		labeledSlider("Brightness", in.brightness, "%+.2f"),
+		labeledSlider("Contrast", in.contrast, "%+.2f"),
+		labeledSlider("Saturation", in.saturation, "%+.2f"),
+		labeledSlider("Temperature (cool / warm)", in.temperature, "%+.2f"),
+	))
+	effects := container.NewVScroll(container.NewVBox(
+		widget.NewForm(widget.NewFormItem("Effect", in.effect), widget.NewFormItem("Crop", in.crop), widget.NewFormItem("Rotate clockwise", in.rotation)),
+		labeledSlider("Center crop zoom", in.zoom, "%.2f ×"),
+		widget.NewLabel("Fit preserves the full image. Fill crops to the movie's aspect ratio. Square and 4:3 crop the source, then letterbox it."),
+	))
+	tabs := container.NewAppTabs(container.NewTabItem("Title", titles), container.NewTabItem("Colour", colour), container.NewTabItem("Effects", effects))
+	tabs.SetTabLocation(container.TabLocationTop)
+	in.applyButton = widget.NewButton("Apply to selected clip", in.apply)
+	previewButton := widget.NewButton("Show clip", func() {
+		if idx := studio.selected; idx >= 0 && idx < len(studio.project.Clips) {
+			studio.pause()
+			studio.seek(studio.project.Start(idx) + math.Min(0.4, studio.project.Clips[idx].Duration()/2))
+		}
+	})
+	in.content = container.NewBorder(
+		container.NewVBox(widget.NewLabelWithStyle("CLIP INSPECTOR", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), in.header),
+		container.NewVBox(in.applyButton, previewButton), nil, nil, tabs)
+	in.applyButton.Disable()
+	return in
+}
+
+func (in *ClipInspector) loadSelection() {
+	s := in.studio
+	if s.selected < 0 || s.selected >= len(s.project.Clips) || s.selectedAudio >= 0 {
+		in.selectedID = ""
+		in.header.SetText("Select a video clip")
+		in.applyButton.Disable()
+		return
+	}
+	c := s.project.Clips[s.selected]
+	if c.ID == in.selectedID && c.Visual == in.loadedVisual && c.Title == in.loadedTitle {
+		return
+	}
+	in.loadedVisual = c.Visual
+	in.loadedTitle = c.Title
+	in.selectedID = c.ID
+	in.header.SetText(c.Name)
+	in.applyButton.Enable()
+	v := c.Visual
+	in.title.SetText(c.Title)
+	set := func(s *widget.Select, value, def string) {
+		if value == "" {
+			value = def
+		}
+		s.SetSelected(value)
+	}
+	set(in.font, v.TitleFont, "Sans")
+	set(in.color, v.TitleColor, "white")
+	set(in.position, v.TitlePosition, "bottom")
+	set(in.animation, v.TitleAnimation, "none")
+	size := float64(v.Size())
+	in.titleSize.SetValue(size)
+	seconds := v.TitleSeconds
+	if seconds == 0 {
+		seconds = 3
+	}
+	in.titleSeconds.SetValue(seconds)
+	in.brightness.SetValue(v.Brightness)
+	in.contrast.SetValue(v.Contrast)
+	in.saturation.SetValue(v.Saturation)
+	in.temperature.SetValue(v.Temperature)
+	set(in.effect, v.Effect, "none")
+	set(in.crop, v.Crop, "fit")
+	in.rotation.SetSelected(strconv.Itoa(v.Rotation))
+	in.zoom.SetValue(v.CropZoom())
+}
+
+func (in *ClipInspector) apply() {
+	s := in.studio
+	idx := s.selected
+	if idx < 0 || idx >= len(s.project.Clips) || s.project.Clips[idx].ID != in.selectedID {
+		return
+	}
+	original := s.project.Clips[idx]
+	changed := original
+	changed.Title = strings.TrimSpace(in.title.Text)
+	v := editor.VisualSettings{
+		TitleFont: in.font.Selected, TitleColor: in.color.Selected, TitlePosition: in.position.Selected,
+		TitleAnimation: in.animation.Selected, TitleSize: int(math.Round(in.titleSize.Value)),
+		TitleSeconds: in.titleSeconds.Value,
+		Brightness:   in.brightness.Value, Contrast: in.contrast.Value, Saturation: in.saturation.Value,
+		Temperature: in.temperature.Value, Effect: in.effect.Selected, Crop: in.crop.Selected,
+		Zoom: in.zoom.Value,
+	}
+	v.Rotation, _ = strconv.Atoi(in.rotation.Selected)
+	// Keep zero-value fields lean and compatible with pre-0.6 projects.
+	if v.TitleFont == "Sans" {
+		v.TitleFont = ""
+	}
+	if v.TitleColor == "white" {
+		v.TitleColor = ""
+	}
+	if v.TitlePosition == "bottom" {
+		v.TitlePosition = ""
+	}
+	if v.TitleAnimation == "none" {
+		v.TitleAnimation = ""
+	}
+	if v.TitleSize == 58 {
+		v.TitleSize = 0
+	}
+	if v.TitleSeconds == 3 {
+		v.TitleSeconds = 0
+	}
+	if v.Effect == "none" {
+		v.Effect = ""
+	}
+	if v.Crop == "fit" {
+		v.Crop = ""
+	}
+	if math.Abs(v.Zoom-1) < 0.001 {
+		v.Zoom = 0
+	}
+	changed.Visual = v
+	if !changed.Valid() {
+		s.problem(fmt.Errorf("clip visual settings are invalid"))
+		return
+	}
+	if original.Title == changed.Title && original.Visual == changed.Visual {
+		s.info.SetText("No inspector changes to apply")
+		return
+	}
+	s.pause()
+	s.remember()
+	s.project.Clips[idx] = changed
+	s.changed("Applied visual settings · preview and export use the same effects")
+	s.seek(s.project.Start(idx) + math.Min(0.4, changed.Duration()/2))
+}
