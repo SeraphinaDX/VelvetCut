@@ -28,6 +28,7 @@ type Clip struct {
 	TransitionOut  Transition      `json:"transition_out,omitempty"`
 	Visual         VisualSettings  `json:"visual,omitempty"`
 	TitleKeyframes []TitleKeyframe `json:"title_keyframes,omitempty"`
+	VideoKeyframes []VideoKeyframe `json:"video_keyframes,omitempty"`
 }
 
 func (c Clip) Duration() float64 { return c.SourceEnd - c.SourceStart }
@@ -39,7 +40,7 @@ func (c Clip) Valid() bool {
 		c.SourceEnd <= c.SourceDuration+1e-5 &&
 		isFinite(c.FadeIn) && isFinite(c.FadeOut) && c.FadeIn >= 0 && c.FadeOut >= 0 &&
 		c.FadeIn <= c.Duration()+1e-5 && c.FadeOut <= c.Duration()+1e-5 &&
-		isFinite(c.ClipAudioVolume()) && c.ClipAudioVolume() >= 0 && c.ClipAudioVolume() <= 2 && c.Visual.Valid() && titleKeyframesValid(c.TitleKeyframes, c.Duration())
+		isFinite(c.ClipAudioVolume()) && c.ClipAudioVolume() >= 0 && c.ClipAudioVolume() <= 2 && c.Visual.Valid() && titleKeyframesValid(c.TitleKeyframes, c.Duration()) && videoKeyframesValid(c.VideoKeyframes, c.Duration())
 }
 
 func isFinite(f float64) bool { return !math.IsInf(f, 0) && !math.IsNaN(f) }
@@ -62,6 +63,7 @@ func (p Project) Clone() Project {
 			clone.Clips[i].AudioVolume = &v
 		}
 		clone.Clips[i].TitleKeyframes = append([]TitleKeyframe(nil), clone.Clips[i].TitleKeyframes...)
+		clone.Clips[i].VideoKeyframes = append([]VideoKeyframe(nil), clone.Clips[i].VideoKeyframes...)
 	}
 	return clone
 }
@@ -178,7 +180,9 @@ func (p *Project) SplitAt(t float64, newID string) (int, error) {
 	first, second := old, old
 	cut := sourceTime - old.SourceStart
 	first.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, 0, cut)
+	first.VideoKeyframes = videoKeyframeRange(old.VideoKeyframes, 0, cut)
 	second.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, cut, old.Duration())
+	second.VideoKeyframes = videoKeyframeRange(old.VideoKeyframes, cut, old.Duration())
 	first.SourceEnd = sourceTime
 	second.SourceStart = sourceTime
 	first.FadeOut = 0
@@ -204,6 +208,7 @@ func (p *Project) TrimLeft(index int, delta float64) error {
 	old := *c
 	c.SourceStart = clamp(c.SourceStart+delta, 0, c.SourceEnd-MinClipLength)
 	c.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, c.SourceStart-old.SourceStart, old.Duration())
+	c.VideoKeyframes = videoKeyframeRange(old.VideoKeyframes, c.SourceStart-old.SourceStart, old.Duration())
 	c.FadeIn = math.Min(c.FadeIn, c.Duration())
 	c.FadeOut = math.Min(c.FadeOut, c.Duration())
 	p.normalizeTransitions()
@@ -219,6 +224,7 @@ func (p *Project) TrimRight(index int, delta float64) error {
 	old := *c
 	c.SourceEnd = clamp(c.SourceEnd+delta, c.SourceStart+MinClipLength, c.SourceDuration)
 	c.TitleKeyframes = titleKeyframeRange(old.TitleKeyframes, 0, c.Duration())
+	c.VideoKeyframes = videoKeyframeRange(old.VideoKeyframes, 0, c.Duration())
 	c.FadeIn = math.Min(c.FadeIn, c.Duration())
 	c.FadeOut = math.Min(c.FadeOut, c.Duration())
 	p.normalizeTransitions()
