@@ -130,21 +130,11 @@ func exportWithProfile(ctx context.Context, project editor.Project, output strin
 	for i, clip := range project.Clips {
 		duration := clip.Duration()
 		args = append(args, "-ss", seconds(clip.SourceStart), "-t", seconds(duration), "-i", clip.Path)
-		video := fmt.Sprintf("[%d:v:0]setpts=PTS-STARTPTS,fps=%d,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv444p,settb=1/%d", i, fps, width, height, width, height, fps)
-		if clip.FadeIn > 0 {
-			video += ",fade=t=in:st=0:d=" + seconds(clip.FadeIn)
+		title, err := makeTitleFile(titlesDir, i, clip.Title)
+		if err != nil {
+			return err
 		}
-		if clip.FadeOut > 0 {
-			video += ",fade=t=out:st=" + seconds(duration-clip.FadeOut) + ":d=" + seconds(clip.FadeOut)
-		}
-		if clip.Title != "" {
-			filename := filepath.Join(titlesDir, fmt.Sprintf("title-%d.txt", i))
-			if err := os.WriteFile(filename, []byte(clip.Title), 0600); err != nil {
-				return err
-			}
-			video += fmt.Sprintf(",drawtext=textfile=%s:expansion=none:fontcolor=white:fontsize=58:box=1:boxcolor=black@0.5:boxborderw=18:x=(w-text_w)/2:y=h*0.76:enable='lt(t,%s)'", filename, seconds(math.Min(3, duration)))
-		}
-		filters = append(filters, video+fmt.Sprintf("[v%d]", i))
+		filters = append(filters, fmt.Sprintf("[%d:v:0]%s[v%d]", i, visualFilters(clip, width, height, fps, title, -1), i))
 		var audio string
 		if clip.HasAudio && !clip.AudioMuted {
 			audio = fmt.Sprintf("[%d:a:0]aresample=48000,apad,atrim=duration=%s,asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:channel_layouts=stereo", i, seconds(duration))

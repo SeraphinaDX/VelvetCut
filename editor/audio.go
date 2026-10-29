@@ -128,7 +128,7 @@ func (p Project) NeedsRenderedPreview() bool {
 		return true
 	}
 	for _, c := range p.Clips {
-		if c.AudioMuted || c.ClipAudioVolume() != 1 {
+		if c.AudioMuted || c.ClipAudioVolume() != 1 || c.Title != "" || c.FadeIn > 0 || c.FadeOut > 0 || c.Visual.Active() {
 			return true
 		}
 	}
