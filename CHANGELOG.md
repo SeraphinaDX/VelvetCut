@@ -1,69 +1,45 @@
 # Changelog
 
+## 0.8.0 (beta) — 2026-10-29
+
+- Add normalized per-clip video camera keyframes for interpolated pan and zoom (Ken Burns-style camera movement).
+- Add a Camera tab with focus/zoom sliders, keyframe creation and navigation, deletion, and a draggable framing guide in the preview.
+- Show cyan video-motion markers alongside existing gold title keyframes.
+- Apply identical FFmpeg zoompan expressions to styled stills, composited playback proxies, and final MP4 export.
+- Preserve camera keyframes through split, trim, save, undo/redo and backward-compatible project JSON.
+- Add regression tests for interpolation, split/trim, validation, JSON persistence, and actual camera-motion preview/export.
+
 ## 0.7.0 (beta) — 2026-10-29
 
-- Add title position, scale and opacity keyframes with linear interpolation.
-- Drag a selected title's guide in the preview to create one undoable position keyframe.
-- Add an Inspector Motion tab with keyframe add/update/remove/clear and previous/next navigation.
-- Show gold keyframe markers along the video timeline.
-- Preserve motion during clip split/trim and deep-copy keyframes for undo; older projects continue to open.
-- Use matching FFmpeg per-frame drawtext expressions for still previews, rendered playback and MP4 export.
-- Add interpolation, split/trim, JSON compatibility and real FFmpeg motion tests.
+- Add normalized title position, scale and opacity keyframes with linear interpolation.
+- Drag a selected title's outline over the movie preview to create one undoable position keyframe.
+- Add an Inspector Motion tab with scale/opacity controls, add/update/delete/clear and previous/next navigation.
+- Show gold keyframe markers on the video timeline.
+- Preserve title animation during split/trim; deep-copy keyframes into undo history; save/load keyframes in existing JSON project v1 format.
+- Share per-frame FFmpeg `drawtext` expressions across still preview, playback proxy and final MP4 export; keep legacy title presets for unkeyframed clips.
+- Add model and FFmpeg integration tests for interpolation, split/trim, saving, motion rendering and backward compatibility.
 
+## 0.6.0 (beta)
 
-## 0.6.0 beta — 2026-10-29
+- Add docked clip inspector with animated title presets, fonts, colours, layout, brightness, contrast, saturation, temperature, colour effects, cropping, rotation, and image zoom.
+- Use matching FFmpeg visual filters for paused stills, rendered preview proxy and export.
 
-- Add docked Clip Inspector with Title, Colour, Effects tabs and atomic apply/undo.
-- Support animated fade, slide, zoom text; presets for title font, color, location, size and duration.
-- Add brightness, contrast, saturation, temperature, BW/sepia/vignette, center crop (fit/fill/square/4:3), 90° rotations and crop zoom.
-- Use a shared FFmpeg filter graph for styled paused frames, composited preview and full MP4 export.
-- Render proxy previews for titles, fades, effects and existing multitrack audio; old projects retain zero-value defaults.
-- Add media rendering regression tests for title animations, video effects, transforms and soundtrack preservation.
+## 0.5.0 (beta)
 
+- Add independent audio lanes, music clips, volume/mute, audio fade, trim, drag, detached audio and export mixing.
 
-## 0.5.0 (beta) — 2026-10-29
+## 0.4.0 (beta)
 
-- Add three independent, individually movable/trimmed audio lanes with waveform previews.
-- Import audio files (MP3, WAV, M4A, AAC, FLAC, Ogg/Opus, AIFF), or drop them into VelvetCut.
-- Add per-audio-clip volume (0–200%), mute, fades and configurable lane.
-- Add per-video-clip volume and mute, including a detach-audio operation that creates an independent clip and mutes the original.
-- Mix independent sound layers with existing video sound and transition crossfades using FFmpeg; match in-editor preview with export via cached audio/effects proxy.
-- Retain compatibility with older version-1 `.velvetcut` projects.
-- Add independent audio model and real FFmpeg export regression tests.
+- Add real overlapping cross-dissolve and fade-through-black transitions, audio crossfades, timeline transition handles and effects-accurate preview.
 
+## 0.3.0 (beta)
 
-## 0.4.0 (beta) — 2026-10-25
+- Add embedded FFmpeg preview, library drag-and-drop, snapping, shortcuts and module path cleanup.
 
-- Add genuine overlapping cross-dissolves and fade-through-black between neighboring clips, with matched audio crossfades.
-- Add per-clip outgoing transition data, validation of available source footage, recalculated project duration, edit-time normalization and backward-compatible project loading.
-- Add purple resizeable transition regions on the timeline and the Transition ⇄ dialog.
-- Render and cache temporary effects-accurate preview MP4s when the project has transitions; use the proxy for both synchronized Fyne and classic mpv playback.
-- Cap waveform rendering and make redraw clip placement linear for long timelines.
-- Preserve the fixed-size raw RGBA frame-stream fix from the 0.3.0 playback hotfix.
-- Add model and FFmpeg integration tests for real transitions, their duration, and audio.
+## 0.2.0
 
-**Beta limitations:** Transition previews require an upfront FFmpeg proxy render that can be slow on large projects, and live GUI/mpv desktop playback still needs testing on CachyOS.
+- Add audio waveforms, titles, clip fades and synchronized mpv playback.
 
-## 0.3.0 (beta) — 2026-10-25
+## 0.1.0
 
-- Add experimental in-editor 15 fps video preview, using incremental FFmpeg MJPEG frame decoding and mpv audio clock. Preserve classic separate-window mpv playback as fallback.
-- Add desktop file drop-to-import, and drop-to-insert when the file is released over the video timeline.
-- Add in-app media library clip drag-and-drop to ripple-insert onto the timeline.
-- Add snapping of playhead seeking and clip insert points to existing cut boundaries with toggleable 8-pixel tolerance.
-- Add editing/transport keyboard shortcuts (Space, S, Delete, arrows, Home/End, Ctrl+Z/Y/S/O).
-- Fix the Go module path to `github.com/SeraphinaDX/VelvetCut`.
-- Add tests covering snapping and bounded FFmpeg streamed video frames.
-
-**Testing note:** Go editing/media tests pass locally. Fyne desktop and mpv A/V playback require validation on Linux; in-editor preview is experimental and is not effects-accurate.
-
-## 0.2.0 — 2026-10-25
-
-- Add mpv synchronized external video/audio preview with virtual EDL and local IPC timeline position.
-- Add audio waveforms aligned to trimmed source clips.
-- Add per-clip titles and black fades (with matching audio fades) to exported MP4s.
-- Add validation for fade parameters and integration tests for export/title/fade/waveform/EDL.
-- Maintain project v1 compatibility.
-
-## 0.1.0 — 2026-10-25
-
-- Initial non-destructive Fyne timeline: insert, split, trim, reorder, thumbnail scrub preview, undo/redo, project save/open, and MP4 export.
+- Initial clip import, split, trim, reorder, project save and MP4 export.
