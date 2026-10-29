@@ -1,23 +1,27 @@
 # Changelog
 
+## 0.5.0 (beta) — 2026-10-29
+
+- Add three independent, individually movable/trimmed audio lanes with waveform previews.
+- Import audio files (MP3, WAV, M4A, AAC, FLAC, Ogg/Opus, AIFF), or drop them into VelvetCut.
+- Add per-audio-clip volume (0–200%), mute, fades and configurable lane.
+- Add per-video-clip volume and mute, including a detach-audio operation that creates an independent clip and mutes the original.
+- Mix independent sound layers with existing video sound and transition crossfades using FFmpeg; match in-editor preview with export via cached audio/effects proxy.
+- Retain compatibility with older version-1 `.velvetcut` projects.
+- Add independent audio model and real FFmpeg export regression tests.
+
+
 ## 0.4.0 (beta) — 2026-10-25
 
-- Add overlapping cross-dissolves and fade-through-black at clip boundaries with synchronized audio crossfades.
-- Persist per-clip outgoing transition metadata and update non-destructive timeline duration, cuts and snapping.
-- Add a Transition dialog plus draggable purple timeline transition regions with length validation.
-- Cache low-resolution, effects-accurate MP4 preview proxies when a movie contains transitions, for Fyne or classic mpv.
-- Limit excessive waveform drawing and calculate clip positions in a linear timeline pass.
-- Preserve the 0.3.0 one-frame preview fix; add real FFmpeg transition and model tests.
+- Add genuine overlapping cross-dissolves and fade-through-black between neighboring clips, with matched audio crossfades.
+- Add per-clip outgoing transition data, validation of available source footage, recalculated project duration, edit-time normalization and backward-compatible project loading.
+- Add purple resizeable transition regions on the timeline and the Transition ⇄ dialog.
+- Render and cache temporary effects-accurate preview MP4s when the project has transitions; use the proxy for both synchronized Fyne and classic mpv playback.
+- Cap waveform rendering and make redraw clip placement linear for long timelines.
+- Preserve the fixed-size raw RGBA frame-stream fix from the 0.3.0 playback hotfix.
+- Add model and FFmpeg integration tests for real transitions, their duration, and audio.
 
-**Beta:** Building a transition preview renders the movie in the background before playback. Full Fyne GUI testing on Linux is still needed.
-
-
-## 0.3.0 beta preview hotfix — 2026-10-25
-
-- Fix the in-editor preview freezing after one frame while audio and playhead continued. The FFmpeg streaming backend now reads fixed-size RGBA frames instead of concatenated MJPEG images, where the JPEG decoder could consume bytes belonging to the next frame.
-- Limit frame buffering to two decoded images; catch up to the mpv clock with at most one Fyne canvas refresh per poll.
-- Add an FFmpeg regression test for sustained frame progression and aspect-ratio-safe portrait videos.
-
+**Beta limitations:** Transition previews require an upfront FFmpeg proxy render that can be slow on large projects, and live GUI/mpv desktop playback still needs testing on CachyOS.
 
 ## 0.3.0 (beta) — 2026-10-25
 

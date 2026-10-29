@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
- "crypto/sha256"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -10,7 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
- "strconv"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +48,7 @@ type Studio struct {
 	library                 []editor.Clip
 	libraryChoice           int
 	selected                int
+	selectedAudio           int
 	playhead                float64
 	zoom                    float64 // logical pixels per second
 	timeline                *Timeline
@@ -81,11 +82,11 @@ type Studio struct {
 	previewVideoNext        *media.PreviewFrame
 	previewVideoCancel      context.CancelFunc
 	previewNotes            *widget.Label
-    playbackProject editor.Project
-    previewProxyPath string
-    previewProxyDir string
-    previewProxyKey [32]byte
-    previewBuildCancel context.CancelFunc
+	playbackProject         editor.Project
+	previewProxyPath        string
+	previewProxyDir         string
+	previewProxyKey         [32]byte
+	previewBuildCancel      context.CancelFunc
 }
 
 // Canvas shortcuts run whenever a text entry is not consuming keyboard input.
@@ -137,18 +138,18 @@ func main() {
 	a.Settings().SetTheme(violetTheme{Theme: theme.DarkTheme()})
 	win := a.NewWindow("VelvetCut · Video Editor")
 	s := &Studio{
-		window: win, project: editor.NewProject(), selected: -1, libraryChoice: -1,
+		window: win, project: editor.NewProject(), selected: -1, selectedAudio: -1, libraryChoice: -1,
 		zoom: 45, snapping: true, embeddedPreview: true, previewVideoClip: -1,
 		frames: make(map[string]image.Image), thumbs: make(map[string]image.Image), waveforms: make(map[string][]float32),
 	}
-	win.Resize(fyne.NewSize(1240, 800))
+	win.Resize(fyne.NewSize(1360, 960))
 	win.SetContent(s.build())
 	s.installShortcuts()
 	win.SetOnDropped(s.importDroppedFiles)
 	win.SetOnClosed(func() {
 		s.stopPlayer()
 		s.stopVideoStream()
-        _ = os.RemoveAll(s.previewProxyDir)
+		_ = os.RemoveAll(s.previewProxyDir)
 		if s.previewCancel != nil {
 			s.previewCancel()
 		}
@@ -168,7 +169,7 @@ func (s *Studio) build() fyne.CanvasObject {
 	s.preview.FillMode = canvas.ImageFillContain
 	s.timeline = NewTimeline(s)
 	s.timelineScroll = container.NewHScroll(s.timeline)
-	s.timelineScroll.SetMinSize(fyne.NewSize(400, 165))
+	s.timelineScroll.SetMinSize(fyne.NewSize(400, timelineHeight))
 
 	s.mediaList = widget.NewList(
 		func() int { return len(s.library) },
@@ -208,7 +209,7 @@ func (s *Studio) build() fyne.CanvasObject {
 		widget.NewButtonWithIcon("Split at playhead", theme.ContentCutIcon(), s.split),
 		widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), s.deleteSelected),
 		widget.NewButton("Title & fades", s.editAppearance),
-        widget.NewButton("Transition ⇄",s.editTransition),
+		widget.NewButton("Transition ⇄", s.editTransition),
 		widget.NewButtonWithIcon("Undo", theme.ContentUndoIcon(), s.undoEdit),
 		widget.NewButtonWithIcon("Redo", theme.ContentRedoIcon(), s.redoEdit),
 		widget.NewSeparator(), widget.NewLabel("Zoom"),
@@ -221,13 +222,14 @@ func (s *Studio) build() fyne.CanvasObject {
 	snapCheck.SetChecked(true)
 	zoomLine := container.NewBorder(nil, nil, container.NewHBox(editingToolbar, snapCheck), nil, slider)
 	timelinePanel := container.NewBorder(
-		container.NewVBox(widget.NewLabelWithStyle("TIMELINE · VIDEO 1", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), zoomLine),
-		widget.NewLabel("Drop library clips to insert  •  S split  •  Space play/pause  •  Drag edges to trim  •  Drag body to reorder  •  Drag purple transition regions to resize"),
+		container.NewVBox(widget.NewLabelWithStyle("TIMELINE · VIDEO 1 + AUDIO 1–3", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), zoomLine, container.NewHBox(
+			widget.NewButton("Add music / SFX", s.importAudio), widget.NewButton("Detach audio", s.detachAudio), widget.NewButton("Volume / fades", s.editAudio), widget.NewLabel("Click an audio clip to select · Drag body to move · Drag edges to trim"))),
+		widget.NewLabel("Video: drag to split/trim/reorder · Audio: independent tracks, draggable edges, volume and fades · Purple: transitions"),
 		nil, nil, s.timelineScroll)
 	topPanel := container.NewHSplit(mediaPanel, previewPanel)
 	topPanel.Offset = 0.27
 	workspace := container.NewVSplit(topPanel, timelinePanel)
-	workspace.Offset = 0.64
+	workspace.Offset = 0.48
 	header := container.NewBorder(nil, nil,
 		container.NewHBox(widget.NewLabelWithStyle("✦ VELVETCUT", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewSeparator()),
 		container.NewHBox(
@@ -236,7 +238,7 @@ func (s *Studio) build() fyne.CanvasObject {
 			widget.NewButtonWithIcon("Save", theme.DocumentSaveIcon(), s.saveProject),
 			widget.NewButtonWithIcon("Export MP4", theme.DownloadIcon(), s.exportMovie),
 		), widget.NewLabel("Non-destructive movie editor"))
-	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.4.0 beta"), s.info), nil, nil, workspace)
+	return container.NewBorder(header, container.NewHBox(widget.NewLabel("VelvetCut 0.5.0 beta"), s.info), nil, nil, workspace)
 }
 
 func (s *Studio) id() string {
@@ -322,6 +324,10 @@ func (s *Studio) importDroppedFiles(pos fyne.Position, uris []fyne.URI) {
 			continue
 		}
 		path := uri.Path()
+		if isAudioPath(path) {
+			s.importAudioPath(path, at)
+			continue
+		}
 		if !isVideoPath(path) {
 			continue
 		}
@@ -450,34 +456,69 @@ func (s *Studio) editAppearance() {
 // editTransition adds a real overlapping clip-to-clip transition after the
 // selected clip (or before the last selected clip).
 func (s *Studio) editTransition() {
-    if len(s.project.Clips)<2 {dialog.ShowInformation("Transitions","Insert at least two clips first.",s.window);return}
-    i:=s.selected
-    if i<0 {dialog.ShowInformation("Select a clip","Select an outgoing clip first.",s.window);return}
-    if i>=len(s.project.Clips)-1 {i--}
-    current:=s.project.Clips[i].TransitionOut
-    options:=[]string{"Cut (none)","Cross dissolve","Fade through black"}
-    kind:=widget.NewSelect(options,nil)
-    selected:="Cut (none)"
-    if current.Kind=="dissolve" {selected="Cross dissolve"} else if current.Kind=="black" {selected="Fade through black"}
-    kind.SetSelected(selected)
-    duration:=widget.NewEntry()
-    if current.Duration>0 {duration.SetText(strconv.FormatFloat(current.Duration,'f',2,64))} else {duration.SetText("0.75")}
-    duration.SetPlaceHolder("Seconds, e.g. 0.75")
-    boundary:=i
-    dialog.NewForm("Transition after "+s.project.Clips[boundary].Name,"Apply","Cancel",[]*widget.FormItem{
-        widget.NewFormItem("Effect",kind),widget.NewFormItem("Duration (seconds)",duration),
-    },func(ok bool){
-        if !ok{return}
-        desired:=""
-        switch kind.Selected {case "Cross dissolve":desired="dissolve";case "Fade through black":desired="black"}
-        sec:=0.0
-        if desired!="" {var err error;sec,err=strconv.ParseFloat(strings.TrimSpace(duration.Text),64);if err!=nil{s.problem(fmt.Errorf("enter a valid duration in seconds: %w",err));return}}
-        before:=s.project.Clone()
-        if err:=s.project.SetTransition(boundary,desired,sec);err!=nil{s.problem(err);return}
-        s.pause();s.undo=append(s.undo,before);s.redo=nil
-        s.seek(s.project.Cut(boundary))
-        s.changed("Transition changed · preview will render on Play")
-    },s.window).Show()
+	if len(s.project.Clips) < 2 {
+		dialog.ShowInformation("Transitions", "Insert at least two clips first.", s.window)
+		return
+	}
+	i := s.selected
+	if i < 0 {
+		dialog.ShowInformation("Select a clip", "Select an outgoing clip first.", s.window)
+		return
+	}
+	if i >= len(s.project.Clips)-1 {
+		i--
+	}
+	current := s.project.Clips[i].TransitionOut
+	options := []string{"Cut (none)", "Cross dissolve", "Fade through black"}
+	kind := widget.NewSelect(options, nil)
+	selected := "Cut (none)"
+	if current.Kind == "dissolve" {
+		selected = "Cross dissolve"
+	} else if current.Kind == "black" {
+		selected = "Fade through black"
+	}
+	kind.SetSelected(selected)
+	duration := widget.NewEntry()
+	if current.Duration > 0 {
+		duration.SetText(strconv.FormatFloat(current.Duration, 'f', 2, 64))
+	} else {
+		duration.SetText("0.75")
+	}
+	duration.SetPlaceHolder("Seconds, e.g. 0.75")
+	boundary := i
+	dialog.NewForm("Transition after "+s.project.Clips[boundary].Name, "Apply", "Cancel", []*widget.FormItem{
+		widget.NewFormItem("Effect", kind), widget.NewFormItem("Duration (seconds)", duration),
+	}, func(ok bool) {
+		if !ok {
+			return
+		}
+		desired := ""
+		switch kind.Selected {
+		case "Cross dissolve":
+			desired = "dissolve"
+		case "Fade through black":
+			desired = "black"
+		}
+		sec := 0.0
+		if desired != "" {
+			var err error
+			sec, err = strconv.ParseFloat(strings.TrimSpace(duration.Text), 64)
+			if err != nil {
+				s.problem(fmt.Errorf("enter a valid duration in seconds: %w", err))
+				return
+			}
+		}
+		before := s.project.Clone()
+		if err := s.project.SetTransition(boundary, desired, sec); err != nil {
+			s.problem(err)
+			return
+		}
+		s.pause()
+		s.undo = append(s.undo, before)
+		s.redo = nil
+		s.seek(s.project.Cut(boundary))
+		s.changed("Transition changed · preview will render on Play")
+	}, s.window).Show()
 }
 
 func (s *Studio) insertClip() {
@@ -501,6 +542,7 @@ func (s *Studio) insertAt(at float64, c editor.Clip) {
 	s.undo = append(s.undo, before)
 	s.redo = nil
 	s.selected = index
+	s.selectedAudio = -1
 	s.seek(s.project.Start(index))
 	s.changed("Inserted " + c.Name + " at playhead")
 }
@@ -516,10 +558,19 @@ func (s *Studio) split() {
 	s.undo = append(s.undo, before)
 	s.redo = nil
 	s.selected = idx
+	s.selectedAudio = -1
 	s.changed("Split clip at " + timecode(s.playhead))
 }
 
 func (s *Studio) deleteSelected() {
+	if s.selectedAudio >= 0 && s.selectedAudio < len(s.project.AudioClips) {
+		s.pause()
+		s.remember()
+		_ = s.project.RemoveAudio(s.selectedAudio)
+		s.selectedAudio = -1
+		s.changed("Audio clip removed (source preserved)")
+		return
+	}
 	if s.selected < 0 || s.selected >= len(s.project.Clips) {
 		return
 	}
@@ -548,6 +599,7 @@ func (s *Studio) undoEdit() {
 	s.project = s.undo[len(s.undo)-1]
 	s.undo = s.undo[:len(s.undo)-1]
 	s.selected = -1
+	s.selectedAudio = -1
 	s.changed("Undo")
 }
 func (s *Studio) redoEdit() {
@@ -559,6 +611,7 @@ func (s *Studio) redoEdit() {
 	s.project = s.redo[len(s.redo)-1]
 	s.redo = s.redo[:len(s.redo)-1]
 	s.selected = -1
+	s.selectedAudio = -1
 	s.changed("Redo")
 }
 func (s *Studio) changed(status string) {
@@ -569,7 +622,10 @@ func (s *Studio) changed(status string) {
 	}
 	s.info.SetText(status)
 	s.clock.SetText(timecode(s.playhead) + " / " + timecode(total))
-	if s.selected >= 0 && s.selected < len(s.project.Clips) {
+	if s.selectedAudio >= 0 && s.selectedAudio < len(s.project.AudioClips) {
+		a := s.project.AudioClips[s.selectedAudio]
+		s.selectedInfo.SetText(fmt.Sprintf("Audio: %s · At %s · Length %s · %.0f%% volume", a.Name, timecode(a.Start), timecode(a.Duration()), a.Volume*100))
+	} else if s.selected >= 0 && s.selected < len(s.project.Clips) {
 		c := s.project.Clips[s.selected]
 		s.selectedInfo.SetText(fmt.Sprintf("%s · Source %s – %s · Clip %s", c.Name, timecode(c.SourceStart), timecode(c.SourceEnd), timecode(c.Duration())))
 	} else {
@@ -607,10 +663,10 @@ func (s *Studio) requestPreview() {
 		return
 	}
 	c := s.project.Clips[i]
-    if s.project.HasTransitions() && s.previewProxyPath!="" && s.previewProxyKey==projectKey(s.project) {
-        c=editor.Clip{Path:s.previewProxyPath,SourceStart:0,SourceEnd:s.project.Duration()}
-        src=s.playhead
-    }
+	if s.project.NeedsRenderedPreview() && s.previewProxyPath != "" && s.previewProxyKey == projectKey(s.project) {
+		c = editor.Clip{Path: s.previewProxyPath, SourceStart: 0, SourceEnd: s.project.Duration()}
+		src = s.playhead
+	}
 	// Still-image scrubbing samples at 4 FPS; actual playback uses mpv.
 	quantized := math.Floor(src*4) / 4
 	key := fmt.Sprintf("%s/%.2f", c.Path, quantized)
@@ -670,9 +726,11 @@ func (s *Studio) advanceVideoPreview(at float64) {
 	if !s.embeddedPreview || !s.playing {
 		return
 	}
-	active:=s.project
-    if len(s.playbackProject.Clips)>0 {active=s.playbackProject}
-    idx, source, ok := active.At(at)
+	active := s.project
+	if len(s.playbackProject.Clips) > 0 {
+		active = s.playbackProject
+	}
+	idx, source, ok := active.At(at)
 	if !ok {
 		return
 	}
@@ -692,9 +750,6 @@ func (s *Studio) advanceVideoPreview(at float64) {
 		s.previewVideoStart = at
 		s.previewVideoSourceStart = source
 	}
-	// Catch up with mpv's audio clock, drawing only the newest due frame.
-	// Refresh once per poll to avoid flooding Fyne with GPU texture uploads
-	// if the decoder has several overdue packets ready at once.
 	var displayed image.Image
 	defer func() {
 		if displayed != nil {
@@ -722,87 +777,145 @@ func (s *Studio) advanceVideoPreview(at float64) {
 		displayed = s.previewVideoNext.Image
 		s.previewVideoNext = nil
 	}
+
 }
 
-// projectKey invalidates preview proxies on project edits.
-func projectKey(p editor.Project) [32]byte {raw,_:=json.Marshal(p);return sha256.Sum256(raw)}
+// projectKey invalidates a preview proxy on any non-destructive edit.
+func projectKey(p editor.Project) [32]byte { raw, _ := json.Marshal(p); return sha256.Sum256(raw) }
 
-// The same FFmpeg filtergraph renders transitions for export and preview.
-// A cached 640x360 MP4 supplies both Fyne's video frames and mpv's audio.
-func (s *Studio) playbackSource(snapshot editor.Project,cachedPath string,reuse bool,ctx context.Context)(editor.Project,string,string,error){
-    if !snapshot.HasTransitions() {return snapshot,"","",nil}
-    path,dir:=cachedPath,""
-    if !reuse {
-        var err error
-        dir,err=os.MkdirTemp("","velvetcut-transition-preview-*")
-        if err!=nil{return editor.Project{},"","",err}
-        path=filepath.Join(dir,"preview.mp4")
-        if err=media.ExportPreview(ctx,snapshot,path);err!=nil {_=os.RemoveAll(dir);return editor.Project{},"","",err}
-    }
-    proxy:=editor.NewProject()
-    duration:=snapshot.Duration()
-    proxy.Clips=[]editor.Clip{{ID:"preview",Name:"Rendered transition preview",Path:path,SourceEnd:duration,SourceDuration:duration,HasAudio:true}}
-    return proxy,path,dir,nil
+// A transition cannot be previewed correctly with mpv's plain EDL. Render the
+// same FFmpeg graph as final export at lower resolution and use the result as
+// one temporary clip for the video-frame stream and synchronized mpv audio.
+// The proxy is reused until an edit changes the project content.
+func (s *Studio) playbackSource(snapshot editor.Project, cachedPath string, reuse bool, ctx context.Context) (editor.Project, string, string, error) {
+	if !snapshot.NeedsRenderedPreview() {
+		return snapshot, "", "", nil
+	}
+	path, dir := cachedPath, ""
+	if !reuse {
+		var err error
+		dir, err = os.MkdirTemp("", "velvetcut-transition-preview-*")
+		if err != nil {
+			return editor.Project{}, "", "", err
+		}
+		path = filepath.Join(dir, "preview.mp4")
+		if err = media.ExportPreview(ctx, snapshot, path); err != nil {
+			_ = os.RemoveAll(dir)
+			return editor.Project{}, "", "", err
+		}
+	}
+	proxy := editor.NewProject()
+	duration := snapshot.Duration()
+	proxy.Clips = []editor.Clip{{ID: "preview", Name: "Rendered transition preview", Path: path, SourceEnd: duration, SourceDuration: duration, HasAudio: true}}
+	return proxy, path, dir, nil
 }
 
 func (s *Studio) togglePlayback() {
-    if s.playing {s.pause();return}
-    if len(s.project.Clips)==0 {return}
-    if s.playhead>=s.project.Duration() {s.seek(0)}
-    s.playing=true
-    s.previewSeq++
-    if s.previewCancel!=nil {s.previewCancel()}
-    s.stopVideoStream()
-    s.playButton.SetText("Pause")
-    s.playButton.SetIcon(theme.MediaPauseIcon())
-    generation:=s.playerGeneration
-    if s.player!=nil {
-        player:=s.player
-        go func(){if err:=player.Pause(context.Background(),false);err!=nil {fyne.Do(func(){if s.player==player {s.stopPlayer();s.problem(err)}})}}()
-        s.pollPlayer(player,generation)
-        return
-    }
-    snapshot:=s.project.Clone()
-    at:=s.playhead
-    embedded:=s.embeddedPreview
-    key:=projectKey(snapshot)
-    reuse:=snapshot.HasTransitions() && key==s.previewProxyKey && s.previewProxyPath!=""
-    cachedPath:=s.previewProxyPath
-    buildCtx,cancel:=context.WithCancel(context.Background())
-    s.previewBuildCancel=cancel
-    if snapshot.HasTransitions() && !reuse {s.info.SetText("Rendering effects-accurate preview proxy (cancel with Pause)…")} else {s.info.SetText("Starting synchronized playback…")}
-    go func(){
-        active,path,dir,err:=s.playbackSource(snapshot,cachedPath,reuse,buildCtx)
-        if err!=nil {
-            fyne.Do(func(){if generation==s.playerGeneration && s.playing {s.pause();s.problem(err)}})
-            return
-        }
-        if buildCtx.Err()!=nil {if dir!="" {_=os.RemoveAll(dir)};return}
-        var player *media.Player
-        if embedded {player,err=media.StartAudioPlayer(context.Background(),active,at)} else {player,err=media.StartPlayer(context.Background(),active,at)}
-        fyne.Do(func(){
-            if generation!=s.playerGeneration || !s.playing {
-                if player!=nil {player.Close()}
-                if dir!="" {_=os.RemoveAll(dir)}
-                return
-            }
-            s.previewBuildCancel=nil
-            if err!=nil {
-                if dir!="" {_=os.RemoveAll(dir)}
-                s.pause();s.problem(err);return
-            }
-            if dir!="" {
-                _=os.RemoveAll(s.previewProxyDir)
-                s.previewProxyDir=dir
-                s.previewProxyPath=path
-                s.previewProxyKey=key
-            }
-            s.playbackProject=active
-            s.player=player
-            if embedded {s.info.SetText("Playing in editor · synchronized audio / composited transitions")} else {s.info.SetText("Playing in mpv window")}
-            s.pollPlayer(player,generation)
-        })
-    }()
+	if s.playing {
+		s.pause()
+		return
+	}
+	if len(s.project.Clips) == 0 {
+		return
+	}
+	if s.playhead >= s.project.Duration() {
+		s.seek(0)
+	}
+	s.playing = true
+	s.previewSeq++
+	if s.previewCancel != nil {
+		s.previewCancel()
+	}
+	s.stopVideoStream()
+	s.playButton.SetText("Pause")
+	s.playButton.SetIcon(theme.MediaPauseIcon())
+	generation := s.playerGeneration
+	if s.player != nil {
+		player := s.player
+		go func() {
+			if err := player.Pause(context.Background(), false); err != nil {
+				fyne.Do(func() {
+					if s.player == player {
+						s.stopPlayer()
+						s.problem(err)
+					}
+				})
+			}
+		}()
+		s.pollPlayer(player, generation)
+		return
+	}
+	snapshot := s.project.Clone()
+	at := s.playhead
+	embedded := s.embeddedPreview
+	key := projectKey(snapshot)
+	reuse := snapshot.NeedsRenderedPreview() && key == s.previewProxyKey && s.previewProxyPath != ""
+	cachedPath := s.previewProxyPath
+	buildCtx, cancel := context.WithCancel(context.Background())
+	s.previewBuildCancel = cancel
+	if snapshot.NeedsRenderedPreview() && !reuse {
+		s.info.SetText("Rendering effects-accurate preview proxy (cancel with Pause)…")
+	} else {
+		s.info.SetText("Starting synchronized playback…")
+	}
+	go func() {
+		active, path, dir, err := s.playbackSource(snapshot, cachedPath, reuse, buildCtx)
+		if err != nil {
+			fyne.Do(func() {
+				if generation == s.playerGeneration && s.playing {
+					s.pause()
+					s.problem(err)
+				}
+			})
+			return
+		}
+		if buildCtx.Err() != nil {
+			if dir != "" {
+				_ = os.RemoveAll(dir)
+			}
+			return
+		}
+		var player *media.Player
+		if embedded {
+			player, err = media.StartAudioPlayer(context.Background(), active, at)
+		} else {
+			player, err = media.StartPlayer(context.Background(), active, at)
+		}
+		fyne.Do(func() {
+			if generation != s.playerGeneration || !s.playing {
+				if player != nil {
+					player.Close()
+				}
+				if dir != "" {
+					_ = os.RemoveAll(dir)
+				}
+				return
+			}
+			s.previewBuildCancel = nil
+			if err != nil {
+				if dir != "" {
+					_ = os.RemoveAll(dir)
+				}
+				s.pause()
+				s.problem(err)
+				return
+			}
+			if dir != "" {
+				_ = os.RemoveAll(s.previewProxyDir)
+				s.previewProxyDir = dir
+				s.previewProxyPath = path
+				s.previewProxyKey = key
+			}
+			s.playbackProject = active
+			s.player = player
+			if embedded {
+				s.info.SetText("Playing in editor · synchronized audio / composited transitions")
+			} else {
+				s.info.SetText("Playing in mpv window")
+			}
+			s.pollPlayer(player, generation)
+		})
+	}()
 }
 
 func (s *Studio) pollPlayer(player *media.Player, generation uint64) {
@@ -848,7 +961,10 @@ func (s *Studio) pause() {
 	}
 	s.playing = false
 	s.stopVideoStream()
-    if s.previewBuildCancel!=nil {s.previewBuildCancel();s.previewBuildCancel=nil}
+	if s.previewBuildCancel != nil {
+		s.previewBuildCancel()
+		s.previewBuildCancel = nil
+	}
 	if s.player == nil {
 		s.playerGeneration++
 	} // stale asynchronous startup cannot adopt a player after pause
@@ -866,14 +982,17 @@ func (s *Studio) pause() {
 }
 func (s *Studio) stopPlayer() {
 	s.stopVideoStream()
-    if s.previewBuildCancel!=nil {s.previewBuildCancel();s.previewBuildCancel=nil}
+	if s.previewBuildCancel != nil {
+		s.previewBuildCancel()
+		s.previewBuildCancel = nil
+	}
 	s.playerGeneration++
 	s.pause()
 	if s.player != nil {
 		s.player.Close()
 		s.player = nil
 	}
-    s.playbackProject=editor.Project{}
+	s.playbackProject = editor.Project{}
 }
 
 func (s *Studio) problem(err error) {
@@ -893,6 +1012,7 @@ func (s *Studio) newProject() {
 		s.project = editor.NewProject()
 		s.projectPath = ""
 		s.selected = -1
+		s.selectedAudio = -1
 		s.undo = nil
 		s.redo = nil
 		s.seek(0)
@@ -967,12 +1087,19 @@ func (s *Studio) openProject() {
 				return
 			}
 		}
+		for _, a := range p.AudioClips {
+			if _, err := os.Stat(a.Path); err != nil {
+				s.problem(fmt.Errorf("missing audio %q: %w", a.Path, err))
+				return
+			}
+		}
 		s.stopPlayer()
 		s.project = p
 		s.projectPath = path
 		s.undo = nil
 		s.redo = nil
 		s.selected = -1
+		s.selectedAudio = -1
 		s.library = nil
 		s.libraryChoice = -1
 		added := map[string]bool{}
@@ -983,6 +1110,9 @@ func (s *Studio) openProject() {
 				s.makeWaveform(c)
 				added[c.Path] = true
 			}
+		}
+		for _, a := range p.AudioClips {
+			s.makeWaveform(editor.Clip{Path: a.Path, HasAudio: true, SourceDuration: a.SourceDuration})
 		}
 		s.mediaList.Refresh()
 		s.seek(0)
